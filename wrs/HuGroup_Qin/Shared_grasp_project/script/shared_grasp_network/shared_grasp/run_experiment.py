@@ -30,7 +30,7 @@ def run_experiment(dateset_type, data_id, train_split, data_ratio, seed):
         '--train_split', str(train_split),
         '--stable_label', 'True',
         '--wandb_project', 'shared_grasp_experiments_paper',
-        '--wandb_name', f'multi_label_grasp_{dateset_type}_bottle_{data_id}_seed_{seed}'
+        '--wandb_name', f'multi_label_grasp_{dateset_type}_bottle_{data_id}_ratio_{data_ratio}seed_{seed}_with_relu'
     ]
     
     print(f"\n开始训练 网络 (dataset={data_id}, seed={seed})...")
@@ -41,10 +41,10 @@ def main():
 
     # 设置不同的网络架构、数据集ID和随机种子
     dateset_types = ['SharedGraspNetwork_bottle_experiment_data']
-    dataset_ids = [57, 83, 109]
+    dataset_ids = [57]
     seeds = [42]
     train_split_set = [0.7]
-    data_ratio_set = [0.3, 0.6, 0.9, 0.99]
+    data_ratio_set = [0.3]
     
     # 依次运行所有组合的实验
     for dateset_type in dateset_types:

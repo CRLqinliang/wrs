@@ -27,7 +27,7 @@ def env_setup():
 
 class AnimeData(object):
     def __init__(self, init_poses, goal_poses, common_ids, gripper, object_feasible_grasps,
-                 initor=r"H:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\power_drill.stl"):
+                 initor=r"E:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\bottle.stl"):
         self.init_obj_cmodel = mcm.CollisionModel(
             name="init_obj",
             initor=initor
@@ -122,8 +122,8 @@ def anime_show_common_grasp(object_feasible_grasps, gripper, common_grasp_data_p
         init_rot = rm.rotmat_to_euler(item[0][1])  # 转换为欧拉角
         init_poses.append(np.concatenate([init_pos, init_rot]))
 
-        goal_pos = np.array(item[1][0]).flatten()
-        goal_rot = rm.rotmat_to_euler(item[1][1])  # 转换为欧拉角
+        goal_pos = np.array(item[5][0]).flatten()
+        goal_rot = rm.rotmat_to_euler(item[5][1])  # 转换为欧拉角
         goal_poses.append(np.concatenate([goal_pos, goal_rot]))
 
         common_ids.append(item[-1])
@@ -139,8 +139,8 @@ def anime_show_common_grasp(object_feasible_grasps, gripper, common_grasp_data_p
 if __name__ == "__main__":
     env_setup()
     # 调用示例
-    object_feasible_grasps_path = r"H:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Power_drill\power_drill_grasp_262.pickle"
+    object_feasible_grasps_path = r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\bottle_grasp_109.pickle"
     object_feasible_grasps = grasp_load(object_feasible_grasps_path)
     gripper = wrs_gripper_v3.WRSGripper3()
-    common_grasp_data_path = r"H:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Power_drill\grasp_random_position_power_drill_robot_table_withstablelabel_test_262.pickle"
+    common_grasp_data_path = r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\SharedGraspNetwork_bottle_experiment_data_109.pickle"
     anime_show_common_grasp(object_feasible_grasps, gripper, common_grasp_data_path)

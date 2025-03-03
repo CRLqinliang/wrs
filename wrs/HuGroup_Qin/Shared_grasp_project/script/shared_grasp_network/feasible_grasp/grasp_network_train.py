@@ -1,20 +1,17 @@
-import os
+
 import sys
-sys.path.append("H:/Qin/wrs")
+sys.path.append("E:/Qin/wrs")
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset, random_split
 import pickle
 import numpy as np
-import wandb
+import wandb, gc
 from sklearn.preprocessing import StandardScaler
 from scipy.spatial.transform import Rotation as R
 import torch.nn.functional as F
-from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score,
-    hamming_loss, average_precision_score, classification_report
-)
+from sklearn.metrics import roc_curve, auc, precision_recall_curve
 import argparse
 import random
 from tqdm.auto import tqdm  # 改用这种方式导入tqdm
@@ -32,571 +29,698 @@ def set_seed(seed=42):
         torch.cuda.manual_seed_all(seed)
 
 
-class GraspingDataset(Dataset):
-    def __init__(self, output_dim, use_stable_label, pickle_file):
-        try:
-            with open(pickle_file, 'rb') as f:
-                data = pickle.load(f)
-        except (FileNotFoundError, EOFError, pickle.UnpicklingError) as e:
-            raise ValueError(f"Error loading file {pickle_file}: {e}")
+class SharedGraspDataset(Dataset):
+    def __init__(self, data, grasp_pickle_file, use_quaternion=False, use_stable_label=True,
+                 grasp_type='robot_table', state_type='both'):
+        """
+        Args:
+            data: 数据列表，每个item包含
+                  [[init_pos, init_rotmat], init_available_gids_robot_table, init_available_gids_table, init_available_gids_robot_without_table, init_stable_id,
+                   [goal_pos, goal_rotmat], goal_available_gids_robot_table, goal_available_gids_table, goal_available_gids_robot_without_table, goal_stable_id,
+                   common_id]
+            grasp_pickle_file: 抓取候选文件路径
+            use_quaternion: 是否使用四元数表示旋转。如果为False，则使用简化的(x,y,rz)表示
+            use_stable_label: 是否使用stable_label作为特征。注意：当use_quaternion=False时必须为True
+            grasp_type: 使用哪种抓取集合，可选 'robot_table', 'table', 'robot'
+            state_type: 处理哪种状态，可选 'init', 'goal', 'both'
+        """
+        # 参数验证
+        if not use_quaternion and not use_stable_label:
+            raise ValueError("非四元数表示(use_quaternion=False)必须使用stable_label")
 
-        self.output_dim = output_dim
+        self.use_quaternion = use_quaternion
         self.use_stable_label = use_stable_label
+        self.data = data
+        self.grasp_type = grasp_type
+        self.state_type = state_type
 
-        # 提取初始位姿和目标位姿
-        init_poses = []
-        for item in data:
-            # 确保position是一维数组
-            init_pos = np.array(item[0][0]).flatten()
-            init_rot = self._rotmat_to_euler(item[0][1])
-            init_poses.append(np.concatenate([init_pos, init_rot]))
+        # 检查参数有效性
+        valid_grasp_types = ['robot_table', 'table', 'robot']
+        valid_state_types = ['init', 'goal', 'both']
 
-        init_poses = np.array(init_poses, dtype=np.float32)
+        if grasp_type not in valid_grasp_types:
+            raise ValueError(f"grasp_type 必须是 {valid_grasp_types} 之一")
+        if state_type not in valid_state_types:
+            raise ValueError(f"state_type 必须是 {valid_state_types} 之一")
 
-        # 分离位置和角度数据
-        init_positions = init_poses[:, :3]  # x,y,z
-        init_angles = init_poses[:, 3:]     # rx,ry,rz
+        # 加载抓取候选
+        with open(grasp_pickle_file, 'rb') as f:
+            grasp_candidates = pickle.load(f)
 
-        # 组合所有特征
-        self.inputs = np.concatenate([
-            init_positions,
-            init_angles,
-        ], axis=1)
+        # 预处理抓取位姿数据 - 始终使用7维表示(pos + quaternion)
+        grasp_poses = np.array([
+            np.concatenate([
+                np.array(grasp.ac_pos, dtype=np.float32).flatten(),
+                R.from_matrix(grasp.ac_rotmat).as_quat()
+            ]) for grasp in grasp_candidates
+        ], dtype=np.float32)
+        self.grasp_poses = torch.from_numpy(grasp_poses.copy())
+        del grasp_poses, grasp_candidates
 
-        # 处理标签
+        # 只有在使用stable_label时才创建编码器
         if self.use_stable_label:
-            stable_labels = np.array([item[1] for item in data], dtype=int).reshape(-1, 1)
-            encoder = OneHotEncoder(sparse=False)
-            stable_labels_one_hot = encoder.fit_transform(stable_labels)
-            self.inputs = np.concatenate([
-                init_positions,
-                init_angles,
-                stable_labels_one_hot
-            ], axis=1)
-        # 处理标签
-        self.labels = np.array([self._create_target_vector(item[-1]) for item in data], dtype=np.float32)
+            # 创建物体stable_id的One-Hot编码器
+            init_types = [item[4] for item in data]  # init_stable_id
+            goal_types = [item[9] for item in data]  # goal_stable_id
+            all_types = list(set(init_types + goal_types))
+            self.obj_encoder = OneHotEncoder(sparse_output=False)
+            self.obj_encoder.fit(np.array(all_types).reshape(-1, 1))
+            del init_types, goal_types, all_types
 
-    def _rotmat_to_euler(self, rotmat):
-        """将旋转矩阵转换为欧拉角(rx, ry, rz)"""
-        r = R.from_matrix(rotmat)
-        return r.as_euler('xyz', degrees=False)
+        self.prepare_data()
 
-    def _create_target_vector(self, label_ids):
-        target_vector = np.zeros(self.output_dim, dtype=np.float32)
-        if label_ids == None:
-            return target_vector
-        target_vector[label_ids] = 1
-        return target_vector
+    def _normalize_angle(self, angle):
+        """将角度从[-π, π]归一化到[0, 1]范围"""
+        angle = (angle + np.pi) % (2 * np.pi) - np.pi
+        return (angle + np.pi) / (2 * np.pi)
+
+    def _convert_rotation(self, rotmat):
+        """转换旋转矩阵为四元数或归一化的欧拉角"""
+        if self.use_quaternion:
+            return R.from_matrix(rotmat).as_quat()
+        else:
+            # 如果不使用四元数，只返回z轴旋转角度并归一化
+            euler = R.from_matrix(rotmat).as_euler('zxy', degrees=False)
+            return np.array([self._normalize_angle(euler[0])], dtype=np.float32)
+
+    def _get_position(self, pos):
+        """根据表示方式返回位置信息"""
+        if self.use_quaternion:
+            return pos.copy()  # 返回完整的xyz
+        else:
+            return pos[:2].copy()  # 只返回xy
+
+    def _get_grasp_indices(self, item, state_type):
+        """获取指定状态和抓取类型的抓取索引列表"""
+        if state_type == 'init':
+            if self.grasp_type == 'robot_table':
+                return item[1]  # init_available_gids_robot_table
+            elif self.grasp_type == 'table':
+                return item[2]  # init_available_gids_table
+            elif self.grasp_type == 'robot':
+                return item[3]  # init_available_gids_robot_without_table
+        else:  # state_type == 'goal'
+            if self.grasp_type == 'robot_table':
+                return item[6]  # goal_available_gids_robot_table
+            elif self.grasp_type == 'table':
+                return item[7]  # goal_available_gids_table
+            elif self.grasp_type == 'robot':
+                return item[8]  # goal_available_gids_robot_without_table
+        return None
+
+    def prepare_data(self):
+        """准备训练数据"""
+        # 计算样本数量
+        total_samples = 0
+        samples_per_state = []
+
+        # 根据state_type确定处理哪些状态
+        states_to_process = []
+        if self.state_type in ['init', 'both']:
+            states_to_process.append('init')
+        if self.state_type in ['goal', 'both']:
+            states_to_process.append('goal')
+
+        # 预计算每个数据项和状态的样本数，并计算总样本数
+        for item in self.data:
+            item_samples = []
+            for state in states_to_process:
+                grasp_indices = self._get_grasp_indices(item, state)
+                if grasp_indices is not None:
+                    # 这里有两种类型的样本：有效抓取(1)和无效抓取(0)
+                    # 有效抓取数量 = len(grasp_indices)
+                    # 无效抓取数量 = len(self.grasp_poses) - len(grasp_indices)
+                    sample_count = len(self.grasp_poses)
+                    total_samples += sample_count
+                    item_samples.append(sample_count)
+                else:
+                    item_samples.append(0)
+            samples_per_state.append(item_samples)
+
+        print(f"总样本数: {total_samples}")
+
+        # 计算特征维度
+        if self.use_quaternion:
+            pose_dim = 7  # pos(3) + quaternion(4)
+        else:
+            pose_dim = 3  # pos(2) + normalized_rz(1)
+
+        grasp_pose_dim = 7  # 抓取位姿始终使用7维表示
+
+        # 根据是否使用stable_label确定特征维度
+        if self.use_stable_label:
+            onehot_dim = len(self.obj_encoder.get_feature_names_out())
+            feature_dim = pose_dim + onehot_dim + grasp_pose_dim
+        else:
+            feature_dim = pose_dim + grasp_pose_dim
+
+        print(f"特征维度: {feature_dim}")
+
+        # 预分配数组
+        all_features = np.zeros((total_samples, feature_dim), dtype=np.float32)
+        all_labels = np.zeros(total_samples, dtype=np.float32)
+
+        # 批量处理数据
+        current_idx = 0
+        for item_idx, item in enumerate(self.data):
+            for state_idx, state in enumerate(states_to_process):
+                if samples_per_state[item_idx][state_idx] == 0:
+                    continue
+
+                # 获取物体位姿和稳定性ID
+                if state == 'init':
+                    obj_pos = self._get_position(np.array(item[0][0], dtype=np.float32))
+                    obj_rot = self._convert_rotation(np.array(item[0][1], dtype=np.float32))
+                    stable_id = item[4]
+                else:  # state == 'goal'
+                    obj_pos = self._get_position(np.array(item[5][0], dtype=np.float32))
+                    obj_rot = self._convert_rotation(np.array(item[5][1], dtype=np.float32))
+                    stable_id = item[9]
+
+                obj_pose = np.concatenate([obj_pos, obj_rot])
+
+                # 获取该状态下的有效抓取索引
+                grasp_indices = self._get_grasp_indices(item, state)
+                if grasp_indices is None:
+                    grasp_indices = []
+
+                # 为该物体状态创建所有抓取的样本
+                n_samples = len(self.grasp_poses)
+                end_idx = current_idx + n_samples
+
+                # 填充特征数组
+                feature_start = 0
+
+                # 添加物体位姿
+                all_features[current_idx:end_idx, feature_start:feature_start + len(obj_pose)] = obj_pose
+                feature_start += len(obj_pose)
+
+                # 如果使用stable_label，添加One-Hot编码
+                if self.use_stable_label:
+                    stable_onehot = self.obj_encoder.transform([[stable_id]]).copy()
+                    all_features[current_idx:end_idx,
+                    feature_start:feature_start + len(stable_onehot[0])] = stable_onehot
+                    feature_start += len(stable_onehot[0])
+                    del stable_onehot
+
+                # 添加抓取位姿
+                all_features[current_idx:end_idx, feature_start:] = self.grasp_poses.numpy()
+
+                # 设置标签
+                # 将有效抓取的标签设为1，其余为0
+                if grasp_indices:
+                    all_labels[current_idx:end_idx][grasp_indices] = 1
+
+                # 清理临时变量
+                del obj_pos, obj_rot, obj_pose
+                current_idx = end_idx
+
+        # 转换为tensor并确保数据独立
+        self.all_features = torch.from_numpy(all_features.copy())
+        self.all_labels = torch.from_numpy(all_labels.copy())
+
+        # 打印数据集信息
+        positive_count = torch.sum(self.all_labels == 1).item()
+        print(
+            f"总样本: {len(self.all_labels)}, 正样本: {positive_count}, 正样本比例: {positive_count / len(self.all_labels):.3f}")
+
+        # 清理中间变量
+        del all_features, all_labels
+        gc.collect()
 
     def __len__(self):
-        return len(self.inputs)
+        return len(self.all_features)
 
     def __getitem__(self, idx):
-        input_vector = self.inputs[idx].copy()
-        label = self.labels[idx]
-
-        return torch.tensor(input_vector, dtype=torch.float32), torch.tensor(label, dtype=torch.float32)
-
-    @staticmethod
-    def load_scaler(scaler_path):
-        with open(scaler_path, 'rb') as f:
-            return pickle.load(f)
+        return self.all_features[idx], self.all_labels[idx]
 
 
-class BalancedBCELoss(nn.Module):
-    def __init__(self, pos_weight=1.5, neg_weight=1.0, zero_label_weight=1.05):
-        super(BalancedBCELoss, self).__init__()
-        self.pos_weight = pos_weight
-        self.neg_weight = neg_weight
-        self.zero_label_weight = zero_label_weight
-
-    def forward(self, inputs, targets):
-        # 计算样本权重
-        positive_samples = targets.sum(dim=1)
-        is_zero_label = (positive_samples == 0)
+class GraspNetwork(nn.Module):
+    def __init__(self, input_dim, hidden_dims=None, num_layers=3, dropout_rate=0.1):
+        super().__init__()
+        if hidden_dims is None:
+            hidden_dims = [256, 256, 256]
         
-        # 对全0样本使用轻微的权重提升
-        sample_weights = torch.ones(targets.shape[0], device=targets.device)
-        sample_weights[is_zero_label] = self.zero_label_weight
+        # 确保hidden_dims是列表且长度等于num_layers
+        if len(hidden_dims) != num_layers:
+            hidden_dims = [hidden_dims[0]] * num_layers
         
-        # 对正负样本分别计算权重
-        weights = torch.where(
-            targets == 1,
-            torch.ones_like(targets) * self.pos_weight,  # 正样本权重
-            torch.ones_like(targets) * self.neg_weight   # 负样本权重
-        )
+        # 构建MLP层
+        layers = []
         
-        # 应用样本权重
-        weights = weights * sample_weights.view(-1, 1)
+        # 输入层
+        layers.append(nn.Linear(input_dim, hidden_dims[0]))
+        layers.append(nn.SELU())
+        layers.append(nn.Dropout(dropout_rate))
         
-        # 计算BCE损失
-        bce_loss = F.binary_cross_entropy_with_logits(
-            inputs, targets, 
-            reduction='none'
-        )
+        # 隐藏层
+        for i in range(1, num_layers):
+            layers.append(nn.Linear(hidden_dims[i-1], hidden_dims[i]))
+            layers.append(nn.SELU())
+            layers.append(nn.Dropout(dropout_rate))
         
-        return (weights * bce_loss).mean()
+        # 输出层
+        layers.append(nn.Linear(hidden_dims[-1], 1))
+        
+        # 创建模型
+        self.model = nn.Sequential(*layers)
+        
+        # 初始化权重
+        self._init_weights()
+    
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                # SELU激活函数推荐的初始化方法
+                nn.init.kaiming_normal_(m.weight, nonlinearity='selu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        return self.model(x)
 
 
-class FocalBCELoss(nn.Module):
-    def __init__(self, gamma=1.5, alpha=0.6):  # 降低gamma，调整alpha
-        super(FocalBCELoss, self).__init__()
-        self.gamma = gamma
-        self.alpha = alpha
-
-    def forward(self, inputs, targets):
-        bce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
-        pt = torch.exp(-bce_loss)
-        alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
-        focal_loss = alpha_t * (1-pt)**self.gamma * bce_loss
-        return focal_loss.mean()
-
-
-def train_model(
-    model, train_loader, val_loader, criterion, optimizer, scheduler,
-    device, best_model_path, eval_th=0.7, num_epochs=50, early_stop_patience=100,
-    min_precision=0.75, min_recall=0.4
-):
-    model.to(device)
-    train_losses = []
-    val_metrics = []  
-    best_val_metric = 0.0  
-    epochs_no_improve = 0
-    early_stop = False
-
-    for epoch in range(num_epochs):
-        if early_stop:
-            print("Early stopping triggered")
-            break
-
-        # 训练阶段
-        model.train()
-        running_loss = 0.0
-        num_batches = 0
-
-        for inputs, labels in train_loader:
-            inputs, labels = inputs.to(device), labels.to(device)
-            optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-            loss.backward()
-
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
-            optimizer.step()
-            running_loss += loss.item()
-            num_batches += 1
-
-        avg_loss = running_loss / num_batches
-
-        # 评估阶段
-        with torch.no_grad():
-            model.eval()
-            train_results = evaluate_model(model, train_loader, device, eval_th)
-            val_results = evaluate_model(model, val_loader, device, eval_th)
-
-        # 打印当前epoch的训练结果
-        print(f'\nEpoch [{epoch + 1}/{num_epochs}]')
-        print(f'Loss: {avg_loss:.4f}')
-        print(f'Train - P: {train_results["precision_macro"]:.4f}, R: {train_results["recall_macro"]:.4f}, F1: {train_results["f1_macro"]:.4f}')
-        print(f'Val   - P: {val_results["precision_macro"]:.4f}, R: {val_results["recall_macro"]:.4f}, F1: {val_results["f1_macro"]:.4f}')
-
-        # 记录训练指标
-        train_losses.append(avg_loss)
-        val_metrics.append(val_results)
-
-        # 记录到wandb
-        wandb.log({
-            "Epoch": epoch + 1,
-            "Training Loss": avg_loss,
-            "Train Precision": train_results["precision_macro"],
-            "Train Recall": train_results["recall_macro"],
-            "Train F1": train_results["f1_macro"],
-            "Train PR-AUC": train_results["pr_auc_macro"],
-            "Val Precision": val_results["precision_macro"],
-            "Val Recall": val_results["recall_macro"], 
-            "Val F1": val_results["f1_macro"],
-            "Val PR-AUC": val_results["pr_auc_macro"],
-            "Validation Accuracy": val_results["accuracy"],
-            "Validation Hamming Loss": val_results["hamming_loss"],
-            "Learning Rate": optimizer.param_groups[0]['lr']
-        })
-
-        # 动态调整阈值
-        if (epoch + 1) % 5 == 0:
-            current_precision = val_results["precision_macro"]
-            precision_target = min(0.8, current_precision + 0.05)
-            
-            eval_th = find_optimal_threshold(
-                model, val_loader, device, 
-                min_precision=min_precision,
-                min_recall=min_recall,
-                precision_target=precision_target
-            )
-            print(f"Epoch {epoch + 1}: 调整阈值为 {eval_th:.3f}")
-
-        # 模型保存和早停
-        scheduler.step(val_results["precision_macro"])
-        if val_results["precision_macro"] > best_val_metric:
-            best_val_metric = val_results["precision_macro"]
-            torch.save(model.state_dict(), best_model_path)
-            print(f"Best model saved with Precision: {best_val_metric:.4f}")
-            epochs_no_improve = 0
-        else:
-            epochs_no_improve += 1
-            if epochs_no_improve >= early_stop_patience:
-                early_stop = True
-                print(f"Early stopping triggered at epoch {epoch + 1}")
-
-    return train_losses, val_metrics
-
-
-def evaluate_model(model, data_loader, device, threshold=0.55):
-    model.eval()
-    all_labels = []
-    all_predictions = []
-    all_logits = []
-    with torch.no_grad():
-        for inputs, labels in data_loader:
-            inputs, labels = inputs.to(device), labels.to(device)
-            outputs = torch.sigmoid(model(inputs))
-            predicted = (outputs > threshold).float()
-
-            all_labels.append(labels.cpu().numpy())
-            all_predictions.append(predicted.cpu().numpy())
-            all_logits.append(outputs.cpu().numpy())
-
-    all_labels = np.vstack(all_labels)
-    all_predictions = np.vstack(all_predictions)
-    all_logits = np.vstack(all_logits)
-
-    # 统计每个类别的正样本数量
-    num_positives_per_class = np.sum(all_labels, axis=0) 
-    valid_classes = num_positives_per_class > 0  # 有正样本的类别索引
-
-    # 忽略无正样本类别
-    if not np.any(valid_classes):
-        raise ValueError("No valid classes with positive samples.")
-
-    filtered_labels = all_labels[:, valid_classes]
-    filtered_predictions = all_predictions[:, valid_classes]
-    filtered_logits = all_logits[:, valid_classes]
-
-    # 计算各类指标（仅针对有正样本的类别）
-    results = {
-        "accuracy": accuracy_score(all_labels, all_predictions) * 100,
-        "hamming_loss": hamming_loss(all_labels, all_predictions),
-        "precision_macro": precision_score(filtered_labels, filtered_predictions, average='macro', zero_division=0),
-        "recall_macro": recall_score(filtered_labels, filtered_predictions, average='macro', zero_division=0),
-        "f1_macro": f1_score(filtered_labels, filtered_predictions, average='macro', zero_division=0),
-        "precision_micro": precision_score(filtered_labels, filtered_predictions, average='micro', zero_division=0),
-        "recall_micro": recall_score(filtered_labels, filtered_predictions, average='micro', zero_division=0),
-        "f1_micro": f1_score(filtered_labels, filtered_predictions, average='micro', zero_division=0),
-        "pr_auc_macro": average_precision_score(filtered_labels, filtered_logits, average='macro'),
-        "pr_auc_micro": average_precision_score(filtered_labels, filtered_logits, average='micro')
+def calculate_metrics(outputs, labels):
+    """计算二分类评估指标"""
+    # 确保输入是numpy数组
+    outputs = np.ascontiguousarray(outputs).flatten()
+    labels = np.ascontiguousarray(labels).flatten()
+    
+    # 计算ROC曲线和AUC
+    fpr, tpr, thresholds = roc_curve(labels, outputs)
+    roc_auc = auc(fpr, tpr)
+    
+    # 找到最佳阈值（使F1分数最大化）
+    precisions, recalls, thresholds_pr = precision_recall_curve(labels, outputs)
+    f1_scores = 2 * (precisions * recalls) / (precisions + recalls + 1e-8)
+    best_idx = np.argmax(f1_scores)
+    best_threshold = thresholds_pr[best_idx] if best_idx < len(thresholds_pr) else 0.5
+    
+    # 使用最佳阈值计算预测结果
+    predictions = (outputs >= best_threshold)
+    
+    # 计算混淆矩阵
+    tp = np.sum((predictions == 1) & (labels == 1))
+    fp = np.sum((predictions == 1) & (labels == 0))
+    fn = np.sum((predictions == 0) & (labels == 1))
+    tn = np.sum((predictions == 0) & (labels == 0))
+    
+    # 计算各种指标
+    accuracy = (tp + tn) / len(labels)
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+    
+    return {
+        'accuracy': accuracy,
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'auc': roc_auc,
+        'optimal_threshold': best_threshold
     }
 
-    # 打印分类报告（仅针对有正样本的类别）
-    class_report = classification_report(filtered_labels, filtered_predictions, zero_division=0)
-    print(f"Validation Accuracy: {results['accuracy']:.2f}%")
-    print(f"Hamming Loss: {results['hamming_loss']:.4f}")
-    print(f"Precision (macro): {results['precision_macro']:.2f}, Recall (macro): {results['recall_macro']:.2f}, F1 Score (macro): {results['f1_macro']:.2f}")
-    print(f"Precision (micro): {results['precision_micro']:.2f}, Recall (micro): {results['recall_micro']:.2f}, F1 Score (micro): {results['f1_micro']:.2f}")
-    print(f"PR-AUC (macro): {results['pr_auc_macro']:.4f}, PR-AUC (micro): {results['pr_auc_micro']:.4f}")  
-    print("\nClassification Report:\n", class_report)
 
-    return results
-
-
-def find_optimal_threshold(model, val_loader, device, 
-                         min_precision=0.75,
-                         min_recall=0.4,
-                         thresholds=np.arange(0.2, 0.8, 0.01),
-                         precision_target=0.8):
-    """动态阈值选择策略"""
-    # 收集预测结果
-    model.eval()
-    with torch.no_grad():
-        all_labels, all_outputs = [], []
-        for inputs, labels in val_loader:
-            outputs = torch.sigmoid(model(inputs.to(device)))
-            all_labels.append(labels.cpu().numpy())
-            all_outputs.append(outputs.cpu().numpy())
+def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler,
+                device, num_epochs, save_path, early_stop_patience=50):
+    model.to(device)
+    best_val_metric = 0
+    patience_counter = 0
+    best_threshold = 0.5  # 初始化最佳阈值
     
-    # 处理数据
-    all_labels = np.vstack(all_labels)
-    all_outputs = np.vstack(all_outputs)
-    valid_classes = np.sum(all_labels, axis=0) > 0
-    filtered_labels = all_labels[:, valid_classes]
-    filtered_outputs = all_outputs[:, valid_classes]
-    
-    # 搜索最优阈值
-    best_metrics = None
-    search_range = thresholds
-    
-    for _ in range(2):  # 最多尝试两轮搜索
-        best_score = -float('inf')
-        for th in search_range:
-            predictions = (filtered_outputs > th).astype(float)
-            precision = precision_score(filtered_labels, predictions, average='macro', zero_division=0)
-            recall = recall_score(filtered_labels, predictions, average='macro', zero_division=0)
-            
-            if precision >= min_precision and recall >= min_recall:
-                # 使用加权F1分数评估
-                precision_weight = 1.5 if precision < precision_target else 1.0
-                weighted_f1 = ((1 + precision_weight) * precision * recall) / \
-                            (precision_weight * precision + recall + 1e-6)
-                
-                if weighted_f1 > best_score:
-                    best_score = weighted_f1
-                    best_metrics = {
-                        'threshold': th,
-                        'precision': precision,
-                        'recall': recall,
-                        'f1': weighted_f1
-                    }
+    for epoch in range(num_epochs):
+        # 训练阶段
+        model.train()
+        epoch_loss = 0.0
+        train_outputs_list = []
+        train_labels_list = []
+        batch_count = 0
         
-        if best_metrics:
-            break
+        train_loop = tqdm(train_loader, desc=f'Epoch {epoch+1}/{num_epochs} [Train]')
+        for inputs, labels in train_loop:
+            inputs = inputs.to(device)
+            labels = labels.to(device).float()
             
-        # 如果第一轮没找到合适的阈值，扩大搜索范围
-        search_range = np.arange(0.1, 0.95, 0.01)
-    
-    # 如果仍然没找到合适的阈值，使用backup策略
-    if not best_metrics:
-        for th in sorted(thresholds, reverse=True):
-            predictions = (filtered_outputs > th).astype(float)
-            precision = precision_score(filtered_labels, predictions, average='macro', zero_division=0)
-            if precision >= min_precision:
-                return th
-    
-    return best_metrics['threshold'] if best_metrics else 0.5
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs.squeeze(), labels)
+            
+            loss.backward()
+            optimizer.step()
+            
+            current_loss = loss.item()
+            epoch_loss += current_loss
+            batch_count += 1
+            
+            # 收集训练数据
+            train_outputs_list.append(torch.sigmoid(outputs).detach().cpu().numpy())
+            train_labels_list.append(labels.cpu().numpy())
+            
+            del outputs, loss, inputs, labels
+            
+            train_loop.set_postfix({'loss': current_loss})
+        
+        # 计算训练指标
+        train_outputs = np.concatenate(train_outputs_list)
+        train_labels = np.concatenate(train_labels_list)
+        train_metrics = calculate_metrics(train_outputs, train_labels)
+        avg_train_loss = epoch_loss / batch_count
 
+        # 验证阶段
+        model.eval()
+        val_loss = 0.0
+        val_outputs_list = []
+        val_labels_list = []
+        
+        val_loop = tqdm(val_loader, desc=f'Epoch {epoch+1}/{num_epochs} [Val]')
+        with torch.no_grad():
+            for val_inputs, val_labels in val_loop:
+                val_inputs = val_inputs.to(device)
+                val_labels = val_labels.to(device).float()
+                val_outputs = model(val_inputs)
+                current_val_loss = criterion(val_outputs.squeeze(), val_labels).item()
+                val_loss += current_val_loss
+                
+                val_outputs_list.append(torch.sigmoid(val_outputs).cpu().numpy())
+                val_labels_list.append(val_labels.cpu().numpy())
+                
+                del val_outputs, val_inputs, val_labels
+                
+                val_loop.set_postfix({'loss': current_val_loss})
+        
+        # 计算验证指标
+        val_outputs = np.concatenate(val_outputs_list)
+        val_labels = np.concatenate(val_labels_list)
+        val_metrics = calculate_metrics(val_outputs, val_labels)
+        avg_val_loss = val_loss / len(val_loader)
 
-def test_model_with_dataset(model, test_loader, device,
-                            thresholds=np.arange(0.3, 0.9, 0.05),
-                            verbose=True):
-    """
-    使用现有数据集测试模型性能，并搜索最佳阈值
-    """
-    model.eval()
-
-    # 收集所有预测和标签
-    all_labels, all_logits = [], []
-    with torch.no_grad():
-        for inputs, labels in tqdm(test_loader, desc="收集预测结果"):
-            inputs, labels = inputs.to(device), labels.to(device)
-            outputs = torch.sigmoid(model(inputs))
-            all_labels.append(labels.cpu().numpy())
-            all_logits.append(outputs.cpu().numpy())
-
-    all_labels = np.vstack(all_labels)
-    all_logits = np.vstack(all_logits)
-
-    # 过滤有效类别
-    valid_classes = np.sum(all_labels, axis=0) > 0
-    filtered_labels = all_labels[:, valid_classes]
-    filtered_logits = all_logits[:, valid_classes]
-
-    # 测试不同阈值
-    threshold_results = {}
-    best_f1 = -1
-    best_threshold = None
-    best_results = None
-
-    # 收集绘图数据
-    thresholds_list, precisions_list, recalls_list = [], [], []
-
-    print("\n测试不同阈值的性能:") if verbose else None
-    for threshold in tqdm(thresholds, desc="测试阈值"):
-        predictions = (all_logits > threshold).astype(float)
-        filtered_predictions = (filtered_logits > threshold).astype(float)
-
-        # 计算评估指标
-        results = {
-            "threshold": threshold,
-            "accuracy": accuracy_score(all_labels, predictions) * 100,
-            "hamming_loss": hamming_loss(all_labels, predictions),
-            "precision_macro": precision_score(filtered_labels, filtered_predictions,
-                                               average='macro', zero_division=0),
-            "recall_macro": recall_score(filtered_labels, filtered_predictions,
-                                         average='macro', zero_division=0),
-            "f1_macro": f1_score(filtered_labels, filtered_predictions,
-                                 average='macro', zero_division=0),
-            "pr_auc_macro": average_precision_score(filtered_labels, filtered_logits,
-                                                    average='macro')
-        }
-
-        # 收集绘图数据
-        thresholds_list.append(threshold)
-        precisions_list.append(results["precision_macro"])
-        recalls_list.append(results["recall_macro"])
-
-        threshold_results[threshold] = results
-
-        # 更新最佳F1分数
-        if results["f1_macro"] > best_f1:
-            best_f1 = results["f1_macro"]
-            best_threshold = threshold
-            best_results = results
-
-        if verbose:
-            print(f"\nThreshold = {threshold:.2f}:")
-            print(f"Accuracy: {results['accuracy']:.2f}%")
-            print(f"Macro - P: {results['precision_macro']:.4f}, "
-                  f"R: {results['recall_macro']:.4f}, "
-                  f"F1: {results['f1_macro']:.4f}")
-
-    # 记录到wandb
-    try:
+        # 更新学习率调度器
+        scheduler.step(avg_val_loss)
+        
+        # 记录到wandb
         wandb.log({
-            "Dataset Threshold Evaluation": wandb.Table(
-                data=[[f"{th:.2f}"] + [f"{v:.4f}" for k, v in res.items() if k != 'threshold']
-                      for th, res in threshold_results.items()],
-                columns=["Threshold"] + [k for k in best_results.keys() if k != 'threshold']
-            ),
-            "Dataset Best Threshold": best_threshold,
-            "Dataset Best F1 Score": best_f1,
-            "Precision-Recall vs Threshold": wandb.plot.line_series(
-                xs=thresholds_list,
-                ys=[precisions_list, recalls_list],
-                keys=["Macro Precision", "Macro Recall"],
-                title="Precision-Recall vs Threshold",
-                xname="Threshold"
-            )
+            "epoch": epoch,
+            "train/loss": avg_train_loss,
+            "val/loss": avg_val_loss,
+            "learning_rate": optimizer.param_groups[0]['lr'],
+            
+            "train/accuracy": train_metrics['accuracy'],
+            "train/precision": train_metrics['precision'],
+            "train/recall": train_metrics['recall'],
+            "train/f1": train_metrics['f1'],
+            "train/auc": train_metrics['auc'],
+            
+            "val/accuracy": val_metrics['accuracy'],
+            "val/precision": val_metrics['precision'],
+            "val/recall": val_metrics['recall'],
+            "val/f1": val_metrics['f1'],
+            "val/auc": val_metrics['auc'],
         })
-    except Exception as e:
-        print(f"Warning: Failed to log to wandb: {str(e)}")
 
-    return best_results, threshold_results
+        # 打印当前epoch的主要指标
+        print(f"\nEpoch {epoch+1}/{num_epochs}")
+        print(f"Train Loss: {avg_train_loss:.4f}, Recall:{train_metrics['recall']:.4f}, Precision:{train_metrics['precision']:.4f},"
+              f" F1: {train_metrics['f1']:.4f}, AUC: {train_metrics['auc']:.4f}")
+        print(f"Val Loss: {avg_val_loss:.4f}, Recall:{val_metrics['recall']:.4f}, Precision:{val_metrics['precision']:.4f},"
+              f" F1: {val_metrics['f1']:.4f}, AUC: {val_metrics['auc']:.4f}")
+        print(f"Optimal Threshold - Train: {train_metrics['optimal_threshold']:.4f}, Val: {val_metrics['optimal_threshold']:.4f}")
+
+        # 验证阶段后的早停检查
+        if val_metrics['f1'] > best_val_metric:  # 使用F1分数作为早停标准
+            best_val_metric = val_metrics['f1']
+            best_threshold = val_metrics['optimal_threshold']  # 保存最佳阈值
+            patience_counter = 0
+            
+            # 保存模型和验证集确定的最佳阈值
+            save_info = {
+                'model_state_dict': model.state_dict(),
+                'best_val_metric': best_val_metric,
+                'epoch': epoch,
+                'optimal_threshold': best_threshold,  # 保存验证集确定的最佳阈值
+                'val_metrics': val_metrics,  # 保存完整的验证集指标
+                'train_metrics': train_metrics  # 保存完整的训练集指标(可选)
+            }
+            print(f"\n保存最佳模型 - 验证集F1: {best_val_metric:.4f}, 最佳阈值: {best_threshold:.4f}")
+            torch.save(save_info, save_path)
+            
+            # 额外分析：使用验证集阈值在训练集上的表现
+            train_with_val_threshold = calculate_metrics_with_fixed_threshold(
+                train_outputs, train_labels, best_threshold)
+            print(f"使用验证集阈值在训练集上的F1: {train_with_val_threshold['f1']:.4f}")
+            
+            # 记录到wandb
+            wandb.log({
+                "val/best_val_f1": best_val_metric,
+                "val/best_threshold": best_threshold,
+                "train/train_f1_with_val_threshold": train_with_val_threshold['f1']
+            })
+        else:
+            patience_counter += 1
+            
+        if patience_counter >= early_stop_patience:
+            print(f"\n早停: 验证集F1分数 {early_stop_patience} 个epoch没有改善")
+            break
+
+        # 清理内存
+        del train_outputs_list, train_labels_list, train_outputs, train_labels
+        del val_outputs_list, val_labels_list, val_outputs, val_labels
+        gc.collect()
+        torch.cuda.empty_cache()
+    
+    # 训练结束后，加载最佳模型并返回
+    best_model_info = torch.load(save_path)
+    model.load_state_dict(best_model_info['model_state_dict'])
+    print(f"\n训练完成 - 加载最佳模型(Epoch {best_model_info['epoch']})")
+    print(f"最佳验证集F1: {best_model_info['best_val_metric']:.4f}")
+    print(f"最佳阈值: {best_model_info['optimal_threshold']:.4f}")
+    
+    return model, best_model_info['optimal_threshold']
 
 
-def analyze_spatial_precision(model, test_loader, device, 
-                            threshold=0.55,
-                            save_path='spatial_precision_scatter.png'):
-    """
-    在指定的工作范围内绘制precision散点图, 并显示采样密度
-    """
+def calculate_metrics_with_fixed_threshold(outputs, labels, threshold):
+    """使用固定阈值计算评估指标"""
+    # 确保输入是连续的numpy数组
+    outputs = np.ascontiguousarray(outputs).flatten()
+    labels = np.ascontiguousarray(labels).flatten()
+    
+    # 使用固定阈值进行预测
+    predictions = (outputs >= threshold)
+    
+    # 计算指标
+    tp = np.sum((predictions == 1) & (labels == 1))
+    fp = np.sum((predictions == 1) & (labels == 0))
+    fn = np.sum((predictions == 0) & (labels == 1))
+    tn = np.sum((predictions == 0) & (labels == 0))
+    
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+    accuracy = (tp + tn) / len(labels)
+    
+    return {
+        'threshold': threshold,
+        'accuracy': accuracy,
+        'precision': precision,
+        'recall': recall,
+        'f1': f1
+    }
+
+
+def evaluate_model(model, test_loader, device, args):
+    """评估模型性能"""
+    # 加载保存的模型信息
+    checkpoint = torch.load(args.model_save_path)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    val_threshold = checkpoint['optimal_threshold']  # 获取验证集确定的最佳阈值
+    
+    print(f"加载模型 - 最佳F1: {checkpoint['best_val_metric']:.4f}, Epoch: {checkpoint['epoch']}")
+    print(f"使用验证集确定的最佳阈值: {val_threshold:.4f}")
+    
+    model = model.to(device)
     model.eval()
+    test_outputs = []
+    test_labels = []
     
-    # 收集数据
-    positions = []
-    precisions = []
-    scaler = test_loader.dataset.dataset.position_scaler
-
+    # 收集所有预测结果
     with torch.no_grad():
-        for features, labels in tqdm(test_loader, desc="收集预测结果"):
-            features = features.to(device)
-            labels = labels.to(device)
-            
-            # 获取位置信息 (x,y)
-            pos_normalized = features[:, :2].cpu().numpy()
-            # 创建完整的特征向量（填充z轴为0）以匹配scaler的维度
-            pos_full = np.zeros((pos_normalized.shape[0], 3))
-            pos_full[:, :2] = pos_normalized
-            # 转换回原始坐标
-            pos = scaler.inverse_transform(pos_full)[:, :2]
-            
-            # 获取模型预测
-            outputs = torch.sigmoid(model(features))
-            predictions = (outputs > threshold).float()
-            
-            # 对每个样本计算precision
-            for i in range(len(pos)):
-                # 获取当前样本的预测和标签
-                sample_pred = predictions[i:i+1]
-                sample_label = labels[i:i+1]
-                
-                # 找出有效类别（有正样本的类别）
-                valid_classes = (sample_label.sum(dim=0) > 0)
-                
-                if valid_classes.any():
-                    # 过滤有效类别
-                    filtered_pred = sample_pred[:, valid_classes]
-                    filtered_label = sample_label[:, valid_classes]
-                    
-                    # 使用sklearn计算macro precision
-                    precision = precision_score(
-                        filtered_label.cpu().numpy(),
-                        filtered_pred.cpu().numpy(),
-                        average='macro',
-                        zero_division=0
-                    )
-                    
-                    positions.append(pos[i])
-                    precisions.append(precision)
+        for inputs, labels in tqdm(test_loader, desc="评估模型"):
+            inputs = inputs.to(device)
+            outputs = torch.sigmoid(model(inputs)).cpu().numpy()
+            test_outputs.extend(outputs)
+            test_labels.extend(labels.numpy())
     
-    positions = np.array(positions)
-    precisions = np.array(precisions)
+    test_outputs = np.array(test_outputs)
+    test_labels = np.array(test_labels)
     
-    # 创建图形
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
+    # 使用验证集阈值评估测试集
+    test_metrics = calculate_metrics(test_outputs, test_labels)
     
-    # 设置全局字体大小
-    plt.rcParams.update({
-        'font.size': 14,
-        'axes.labelsize': 16,
-        'axes.titlesize': 18,
-        'xtick.labelsize': 14,
-        'ytick.labelsize': 14
-    })
+    print("\n=== 测试集评估结果 ===")
+    print(f"Accuracy: {test_metrics['accuracy']:.4f}")
+    print(f"Precision: {test_metrics['precision']:.4f}")
+    print(f"Recall: {test_metrics['recall']:.4f}")
+    print(f"F1 Score: {test_metrics['f1']:.4f}")
+    print(f"AUC: {test_metrics['auc']:.4f}")
+    
+    return test_metrics
 
-    # 1. 散点图：显示precision分布
-    scatter = ax1.scatter(positions[:, 0], positions[:, 1], 
-                         c=precisions, 
-                         cmap='YlOrRd',
-                         s=50,
-                         alpha=0.6,
-                         vmin=0, vmax=1)
+
+def load_raw_data(data_path, ratio=0.5, data_range=None):
+    """加载原始数据
+    Args:
+        data_path: 数据文件路径
+        ratio: 使用数据的比例，默认0.5表示使用后半部分数据
+    """
+    with open(data_path, 'rb') as f:
+        raw_data = pickle.load(f)
+        if ratio is not None:
+            start_idx = int(len(raw_data) * ratio)
+            raw_data = raw_data[start_idx:]
+            print(f"加载数据: 总量 {len(raw_data)}, 起始点数据比例 { ratio:.1%}")
+            return raw_data
+        # if data_range is not None:
+        #     raw_data = raw_data[:data_range]
+        #     print(f"加载数据: 数据总量 {len(raw_data)}")
+        #     return raw_data
+
+
+def split_data_indices(total_size, train_split, val_split):
+    """划分数据集索引"""
+    train_size = int(train_split * total_size)
+    val_size = int(val_split * total_size)
+    test_size = total_size - train_size - val_size
     
-    # ax1.set_xlim(x_range)
-    # ax1.set_ylim(y_range)
-    ax1.set_xlabel('X Position (m)', fontsize=16)
-    ax1.set_ylabel('Y Position (m)', fontsize=16)
-    ax1.set_title('Spatial Precision Distribution', fontsize=18, pad=15)
-    ax1.tick_params(axis='both', labelsize=18)  # 设置x和y轴刻度标签大小
-    ax1.grid(True, linestyle='--', alpha=0.3)
-    cbar1 = plt.colorbar(scatter, ax=ax1, label='Precision')
-    cbar1.ax.tick_params(labelsize=14)
-    cbar1.set_label('Precision', fontsize=16)
+    indices = list(range(total_size))
+    random.shuffle(indices)
     
-    # 2. 密度图：显示采样点密度
-    from scipy.stats import gaussian_kde
-    xy = np.vstack([positions[:, 0], positions[:, 1]])
-    z = gaussian_kde(xy)(xy)
+    return {
+        'train': indices[:train_size],
+        'val': indices[train_size:train_size+val_size],
+        'test': indices[train_size+val_size:]
+    }
+
+
+def create_datasets(raw_data, indices, args):
+    # 创建训练集
+    train_dataset = SharedGraspDataset(
+        [raw_data[i] for i in indices['train']],
+        args.grasp_data_path,
+        use_quaternion=args.use_quaternion,
+        use_stable_label=args.use_stable_label,
+        grasp_type=args.grasp_type,
+        state_type=args.state_type,
+    )
+
+    # 使用训练集的标准化器创建验证集和测试集
+    val_dataset = SharedGraspDataset(
+        [raw_data[i] for i in indices['val']],
+        args.grasp_data_path,
+        use_quaternion=args.use_quaternion,
+        use_stable_label=args.use_stable_label,
+        grasp_type=args.grasp_type,
+        state_type=args.state_type,
+    )
     
-    density = ax2.scatter(positions[:, 0], positions[:, 1],
-                         c=z,
-                         cmap='viridis',
-                         s=50,
-                         alpha=0.6)
+    test_dataset = SharedGraspDataset(
+        [raw_data[i] for i in indices['test']],
+        args.grasp_data_path,
+        use_quaternion=args.use_quaternion,
+        use_stable_label=args.use_stable_label,
+        grasp_type=args.grasp_type,
+        state_type=args.state_type,
+    )
     
-    # ax2.set_xlim(x_range)
-    # ax2.set_ylim(y_range)
-    ax2.set_xlabel('X Position (m)', fontsize=16)
-    ax2.set_ylabel('Y Position (m)', fontsize=16)
-    ax2.set_title('Sampling Density Distribution', fontsize=18, pad=15)
-    ax2.tick_params(axis='both', labelsize=18)  # 设置x和y轴刻度标签大小
-    ax2.grid(True, linestyle='--', alpha=0.3)
-    cbar2 = plt.colorbar(density, ax=ax2, label='Density')
-    cbar2.ax.tick_params(labelsize=14)
-    cbar2.set_label('Density', fontsize=16)
+    return train_dataset, val_dataset, test_dataset
+
+
+def create_data_loaders(train_dataset, val_dataset, test_dataset, args):
+    """创建数据加载器"""
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        persistent_workers=True,  # 添加这个参数
+        prefetch_factor=2  # 添加这个参数
+    )
     
-    # 打印统计信息
-    mean_precision = np.mean(precisions)
-    std_precision = np.std(precisions)
-    print(f"\n空间分布统计:")
-    print(f"样本数量: {len(precisions)}")
-    print(f"平均precision: {mean_precision:.3f} ± {std_precision:.3f}")
-    print(f"最大precision: {np.max(precisions):.3f}")
-    print(f"最小precision: {np.min(precisions):.3f}")
+    # 验证和测试加载器类似修改
+   # val_sampler = BalancedBatchSampler(val_dataset, args.batch_size)
+    val_loader = DataLoader(
+        val_dataset, 
+        shuffle=False,
+        batch_size=args.batch_size * 2,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2
+    )
+  #  test_sampler = BalancedBatchSampler(test_dataset, args.batch_size)
+    test_loader = DataLoader(
+        test_dataset,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=args.pin_memory
+    )
     
-    # 保存图片
-    plt.tight_layout()
-    plt.savefig(save_path, bbox_inches='tight', dpi=300)
-    plt.close()
+    return train_loader, val_loader, test_loader
+
+
+def calculate_input_dim(args):
+    """根据参数计算输入维度"""
+    # 抓取位姿始终是7维 (pos + quaternion)
+    grasp_pose_dim = 7
     
-    return positions, precisions
+    # 计算物体位姿维度
+    if args.use_quaternion:
+        pose_dim = 7  # pos(3) + quaternion(4)
+    else:
+        pose_dim = 3  # pos(2) + normalized_rz(1)
+    
+    # 计算稳定性标签维度 - feasible grasp type
+    if args.use_stable_label:
+        stable_label_dim = 5  # 假设有5个稳定性类别
+        return pose_dim  + stable_label_dim + grasp_pose_dim
+    else:
+        return pose_dim  + grasp_pose_dim
+
+
+def setup_training(args):
+    """设置模型、损失函数、优化器等训练组件"""
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # 自动计算输入维度
+    input_dim = calculate_input_dim(args)
+    print(f"计算得到的输入维度: {input_dim}")
+    
+    model = GraspNetwork(
+        input_dim=input_dim,
+        hidden_dims=args.hidden_dims,
+        num_layers=args.num_layers,
+        dropout_rate=args.dropout_rate
+    )
+    
+    # 初始化损失函数
+    criterion = nn.BCEWithLogitsLoss()
+    
+    # 初始化优化器
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=args.learning_rate,
+        weight_decay=args.weight_decay
+    )
+    
+    # 初始化学习率调度器
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode='max',
+        factor=args.lr_factor,
+        patience=args.lr_patience,
+        verbose=True,
+        min_lr=args.min_lr
+    )
+    
+    return model, criterion, optimizer, scheduler, device
 
 
 def parse_args():
@@ -607,159 +731,130 @@ def parse_args():
     parser.add_argument('--data_path', type=str, 
                       default=r'H:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\grasp_random_position_bottle_robot_table_57.pickle',
                       help='训练数据路径')
+    parser.add_argument('--grasp_data_path', type=str,
+                      default=r'H:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\bottle_grasp_57.pickle',
+                      help='抓取候选数据路径')
     parser.add_argument('--model_save_path', type=str,
                       default=r'H:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\feasible_best_model\feasible_grasp_robot_table_bottle_57.pth',
                       help='模型保存路径')
+    parser.add_argument('--train_split', type=float, default=0.7, help='训练集比例')
+    parser.add_argument('--val_split', type=float, default=0.15, help='验证集比例')
+    parser.add_argument('--data_ratio', type=float, default=1.0, help='数据采样比例')
+    parser.add_argument('--data_range', type=int, default=1e5, help='数据采样个数')
+
+    # 数据加载参数
+    parser.add_argument('--num_workers', type=int, default=4, help='数据加载线程数')
+    parser.add_argument('--pin_memory', type=bool, default=True, help='是否使用内存锁定')
+    parser.add_argument('--use_balanced_sampler', type=bool, default=True, help='是否使用平衡采样器')
     
-    # 训练相关参数
-    parser.add_argument('--random_seed', type=int, default=22, help='随机种子')
+    # 模型结构参数
+    parser.add_argument('--hidden_dims', nargs='+', type=int, default=[256, 256, 256],
+                       help='隐藏层维度')
+    parser.add_argument('--num_layers', type=int, default=3, help='网络层数')
+    parser.add_argument('--dropout_rate', type=float, default=0.1, help='Dropout比率')
+    parser.add_argument('--use_quaternion', type=int, default=1,
+                       help='使用四元数表示 (1) 或简化表示 (0)')
+    parser.add_argument('--use_stable_label', type=int, default=1,
+                       help='使用稳定性标签 (1) 或不使用 (0)')
+    parser.add_argument('--grasp_type', type=str, default='robot_table',
+                       help='抓取类型')
+    parser.add_argument('--state_type', type=str, default='init',
+                       help='状态类型')
+    
+    # 训练超参数
     parser.add_argument('--batch_size', type=int, default=128, help='批次大小')
     parser.add_argument('--num_epochs', type=int, default=500, help='训练轮数')
     parser.add_argument('--learning_rate', type=float, default=1e-4, help='学习率')
     parser.add_argument('--weight_decay', type=float, default=0.01, help='权重衰减')
-    parser.add_argument('--train_split', type=float, default=0.75, help='训练集比例')
-    parser.add_argument('--val_split', type=float, default=0.15, help='验证集比例')
+    parser.add_argument('--early_stop_patience', type=int, default=50, help='早停耐心值')
     
-    # 模型相关参数
-    parser.add_argument('--input_dim', type=int, default=6, help='输入维度')
-    parser.add_argument('--output_dim', type=int, default=57, help='输出维度')
-    parser.add_argument('--max_weight', type=float, default=10, help='BCE损失最大权重')
-    
-    # 训练控制参数
-    parser.add_argument('--early_stop_patience', type=int, default=300, help='早停耐心值')
-    parser.add_argument('--scheduler_patience', type=int, default=30, help='学习率调度器耐心值')
-    parser.add_argument('--scheduler_factor', type=float, default=0.5, help='学习率调度器衰减因子')
+    # 学习率调度器参数
+    parser.add_argument('--lr_factor', type=float, default=0.5, help='学习率调度器衰减因子')
+    parser.add_argument('--lr_patience', type=int, default=30, help='学习率调度器耐心值')
     parser.add_argument('--min_lr', type=float, default=1e-5, help='最小学习率')
-
-
+    
+    # 其他参数
+    parser.add_argument('--seed', type=int, default=42, help='随机种子')
+    parser.add_argument('--train_model', type=bool, default=True, help='是否训练模型')
+    
     # wandb相关参数
     parser.add_argument('--wandb_project', type=str, default='regrasp', help='wandb项目名称')
     parser.add_argument('--wandb_name', type=str, 
-                      default='grasp_random_position_robot_resnet_with_self_attention_deeper',
+                      default='grasp_feasibility_classification',
                       help='wandb运行名称')
     
-    # 添加新的参数
-    parser.add_argument('--target_precision', type=float, default=0.8, 
-                       help='目标精确率')
-    parser.add_argument('--initial_threshold', type=float, default=0.6,
-                       help='初始预测阈值')
-    parser.add_argument('--min_precision', type=float, default=0.8, 
-                       help='阈值选择时的最小precision要求')
-    parser.add_argument('--min_recall', type=float, default=0.7, 
-                       help='阈值选择时的最小recall要求')
+    args = parser.parse_args()
+    # 将整数转换为布尔值
+    args.use_quaternion = bool(args.use_quaternion)
+    args.use_stable_label = bool(args.use_stable_label)
     
-    # 添加网络架构选择参数
-    parser.add_argument('--network_type', type=str, default='mlp',
-                      choices=['mlp', 'resnet', 'resnet_attention'],
-                      help='选择网络架构类型')
-    parser.add_argument('--use_stable_label', action='store_true',
-                        help='是否使用stable label')
-    
-    return parser.parse_args()
+    return args
 
 
-def get_model(args):    
-    """根据参数选择网络架构"""
-    if args.network_type == 'mlp':
-        from wrs.HuGroup_Qin.Shared_grasp_project.network.MlpBlock import GraspingNetwork
-    elif args.network_type == 'resnet':
-        from wrs.HuGroup_Qin.Shared_grasp_project.network.ResidualBlock import GraspingNetwork
-    elif args.network_type == 'resnet_attention':
-        from wrs.HuGroup_Qin.Shared_grasp_project.network.ResidualBlockWithSelfAttention import GraspingNetwork
-    
-    return GraspingNetwork(input_dim=args.input_dim, output_dim=args.output_dim)
-
-
-if __name__ == '__main__':
-    # 解析参数
+def main():
+    # 解析参数并设置随机种子
     args = parse_args()
-    set_seed(args.random_seed)
-
-    # 加载数据集
-    full_dataset = GraspingDataset(args.output_dim, args.use_stable_label, args.data_path)
-
-    # 计算数据集分割
-    train_size = int(args.train_split * len(full_dataset))
-    val_size = int(args.val_split * len(full_dataset))
-    test_size = len(full_dataset) - train_size - val_size
-    train_dataset, val_dataset, test_dataset = random_split(
-        full_dataset, [train_size, val_size, test_size]
-    )
-
-    # 创建数据加载器
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
-
-    # 设置设备和模型
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = get_model(args)
-
-    # model.load_state_dict(torch.load(args.model_save_path))
-    # model.to(device)
-
-    # 设置损失函数和优化器
-    # criterion = lambda pred, target: (
-    #     0.7 * BalancedBCELoss()(pred, target) +
-    #     0.3 * FocalBCELoss()(pred, target)
-    # )
-
-    criterion = nn.BCEWithLogitsLoss()
-
-    optimizer = optim.AdamW(
-        model.parameters(),
-        lr=args.learning_rate,
-        weight_decay=args.weight_decay
-    )
-
-    # 设置学习率调度器
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode='max',
-        factor=args.scheduler_factor,
-        patience=args.scheduler_patience,
-        verbose=True,
-        min_lr=args.min_lr
-    )
-
+    set_seed(args.seed)
+    
     # 初始化wandb
     try:
         wandb.init(
             project=args.wandb_project,
             name=args.wandb_name,
-            config=vars(args)  # 将所有参数记录到wandb
+            config=vars(args)
         )
     except Exception as e:
         print(f"Failed to initialize Weights and Biases: {e}")
-
-    # 训练模型
-    train_losses, val_precisions = train_model(
-        model, train_loader, val_loader, criterion, optimizer, scheduler,
-        device, args.model_save_path, args.initial_threshold,
-        args.num_epochs, args.early_stop_patience,
-        min_precision=args.min_precision,
-        min_recall=args.min_recall
+    
+    # 加载原始数据
+    raw_data = load_raw_data(args.data_path, args.data_ratio, args.data_range)
+    indices = split_data_indices(len(raw_data), args.train_split, args.val_split)
+    
+    # 创建数据集
+    train_dataset, val_dataset, test_dataset = create_datasets(raw_data, indices, args)
+    
+    # 及时清理原始数据
+    del raw_data, indices
+    gc.collect()
+    
+    # 创建数据加载器
+    train_loader, val_loader, test_loader = create_data_loaders(
+        train_dataset, val_dataset, test_dataset, args
     )
+    
+    # 设置训练组件
+    model, criterion, optimizer, scheduler, device = setup_training(args)
+    
+    if args.train_model:
+        # 训练模型
+        model, best_threshold = train_model(
+            model=model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            criterion=criterion,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            device=device,
+            num_epochs=args.num_epochs,
+            save_path=args.model_save_path,
+            early_stop_patience=args.early_stop_patience
+        )
+        print("开始评估模型...")
+        evaluate_model(model, test_loader, device, args)
+    else:
+        # 评估模型
+        print("开始评估模型...")
+        evaluate_model(model, test_loader, device, args)
+    
+    # 关闭wandb
+    try:
+        wandb.finish()
+    except Exception as e:
+        print(f"Failed to close Weights and Biases: {e}")
 
-    # # 已有数据集测试
-    # model = get_model(args)
-    # model.load_state_dict(torch.load(args.model_save_path))
-    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    # model.to(device)
-    #
-    # # 使用数据集测试模型
-    # print("\n使用数据集进行测试...")
-    # # dataset_results = test_model_with_dataset(model, test_loader, device='cpu')
-    # dataset_results = evaluate_model(model, test_loader, device)
 
-    # xy平面precision分布可视化
-    # precision_matrix, sample_count = analyze_spatial_precision(
-    # model, 
-    # train_loader, # 用训练集数据可视化
-    # device,
-    # save_path=r'H:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\script\feasible_grasp\robot_spatial_precision_analysis.png')
-
-
+if __name__ == '__main__':
+    main()
 
 
 

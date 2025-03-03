@@ -12,8 +12,8 @@ grasp_path = os.path.join(os.getcwd(), "pickles", mesh_name + "_grasp.pickle")
 regspot_path = os.path.join(os.getcwd(), "pickles", mesh_name + "_regspot.pickle")
 
 base = wd.World(cam_pos=[2, 1, 2], lookat_pos=[0, 0, .5])
-# ground = mcm.gen_box(xyz_lengths=rm.vec(5, 5, .01), pos=rm.vec(0, 0, -0.005))
-# ground.attach_to(base)
+ground = mcm.gen_box(xyz_lengths=rm.vec(5, 5, .01), pos=rm.vec(0, 0, -0.005))
+ground.attach_to(base)
 bunny = mcm.CollisionModel(mesh_path)
 robot = cbtwt.CobottaTweezer()
 robot.gen_meshmodel().attach_to(base)
@@ -25,19 +25,20 @@ fsregspot_collection = fsp.FSRegSpotCollection(robot=robot,
                                                obj_cmodel=bunny,
                                                fs_reference_poses=fs_reference_poses,
                                                reference_gc=reference_grasps)
-# spot_pos0 = rm.np.array([.3, .2, .0])
-# spot_pos1 = rm.np.array([.32, .0, .0])
-spot_pos2 = rm.np.array([.12, -.1, .1])
+spot_pos0 = rm.np.array([.1, .2, .0])
+spot_pos1 = rm.np.array([.12, .1, .0])
+spot_pos2 = rm.np.array([.22, .15, .0])
 # mgm.gen_sphere(pos=spot_pos0).attach_to(base)
 # mgm.gen_sphere(pos=spot_pos1).attach_to(base)
 # mgm.gen_sphere(pos=spot_pos2).attach_to(base)
 # base.run()
-# fsregspot_collection.add_new_spot(spot_pos=spot_pos0, barrier_z_offset=None, spot_rotz=np.radians(90))
-# fsregspot_collection.add_new_spot(spot_pos=spot_pos1, barrier_z_offset=None, spot_rotz=np.radians(90))
-fsregspot_collection.add_new_spot(spot_pos=spot_pos2, barrier_z_offset=None, spot_rotz=np.radians(90), toggle_dbg=True)
+fsregspot_collection.add_new_spot(spot_pos=spot_pos0, barrier_z_offset=-1e-4, spot_rotz=np.radians(90))
+fsregspot_collection.add_new_spot(spot_pos=spot_pos1, barrier_z_offset=-1e-4, spot_rotz=np.radians(90))
+fsregspot_collection.add_new_spot(spot_pos=spot_pos2, barrier_z_offset=-1e-4, spot_rotz=np.radians(90), toggle_dbg=False)
 fsregspot_collection.save_to_disk(regspot_path)
 fsregspot_collection.load_from_disk(regspot_path)
 mesh_model_list = fsregspot_collection.gen_meshmodel()
+
 for fsregspot in fsregspot_collection:
     mcm.mgm.gen_frame(pos=fsregspot.pos,
                       rotmat=rm.rotmat_from_euler(0, 0, fsregspot.rotz)).attach_to(base)

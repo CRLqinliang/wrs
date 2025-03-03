@@ -27,8 +27,8 @@ import argparse
 
 
 # world configuration
-# base = wd.World(cam_pos=[2, 2, 2], lookat_pos=[0, 0, .3])
-# mgm.gen_frame().attach_to(base)
+base = wd.World(cam_pos=[2, 2, 2], lookat_pos=[0, 0, .3])
+mgm.gen_frame().attach_to(base)
 BASE_PATH = r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle"
 GRASP_DATA_PREFIX = "bottle_grasp"
 SAVE_PREFIX = "SharedGraspNetwork_bottle_experiment_data"
@@ -312,6 +312,7 @@ if __name__ == '__main__':
                     obstacle_list=None,
                     toggle_dbg=False
                 )
+
 
                 # 计算可行抓取 - table
                 init_available_gids_table, _ , = RegraspReasoner.find_feasible_gids(

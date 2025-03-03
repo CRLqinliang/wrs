@@ -21,132 +21,69 @@ from sklearn.preprocessing import OneHotEncoder
 import gc
 import wrs.basis.robot_math as rm
 
-
-class GraspEnergyDataset(Dataset):
-    def __init__(self, data, grasp_pickle_file, use_quaternion=False):
-        """
-        Args:
-            data: 数据列表，每个item包含 [[obj_pos, obj_rotmat], stable_id, available_gids]
-            grasp_pickle_file: 抓取候选文件路径
-            use_quaternion: 是否使用四元数表示旋转
-        """
-        self.data = data
-        self.use_quaternion = use_quaternion
-        
-        # 加载抓取候选
-        with open(grasp_pickle_file, 'rb') as f:
-            self.grasp_candidates = pickle.load(f)
-            
-        # 创建物体stable_placement_id类型的One-Hot编码器
-        obj_types = [item[1] for item in data]  # stable_placement_id
-        self.obj_encoder = OneHotEncoder(sparse=False)
-        self.obj_encoder.fit(np.array(obj_types).reshape(-1, 1))
-        
-        self.prepare_data()
-    
-    def _convert_rotation(self, rotmat):
-        """转换旋转矩阵为四元数或欧拉角"""
-        if self.use_quaternion:
-            return R.from_matrix(rotmat).as_quat()
-        return R.from_matrix(rotmat).as_euler('xyz', degrees=False)
-    
-    def prepare_data(self):
-        """准备训练数据"""
-        # 预先计算总样本数，避免动态扩展
-        total_samples = len(self.data) * len(self.grasp_candidates)
-        
-        # 一次性处理所有抓取位姿，避免重复计算
-        grasp_poses = np.array([
-            np.concatenate([
-                np.array(grasp.ac_pos, dtype=np.float32).flatten(),
-                self._convert_rotation(grasp.ac_rotmat)
-            ]) for grasp in self.grasp_candidates
-        ], dtype=np.float32)
-        
-        # 预分配数组，避免append操作
-        feature_dim = grasp_poses.shape[1] + 7 + len(self.obj_encoder.get_feature_names_out())  # grasp_pose + obj_pose + obj_type
-        all_features = np.zeros((total_samples, feature_dim), dtype=np.float32)
-        all_labels = np.zeros(total_samples, dtype=np.float32)
-        
-        # 批量处理数据
-        current_idx = 0
-        for item in self.data:
-            # 物体位姿 - 确保创建新的数组而不是引用
-            obj_pos = np.array(item[0][0], dtype=np.float32).copy().flatten()
-            obj_rot = self._convert_rotation(np.array(item[0][1], dtype=np.float32).copy())
-            obj_pose = np.concatenate([obj_pos, obj_rot])
-            
-            # 物体类型One-Hot编码 - 确保创建新的数组
-            obj_type_onehot = self.obj_encoder.transform([[item[1]]])[0].copy()
-            
-            # 计算当前物体的样本范围
-            n_samples = len(self.grasp_candidates)
-            end_idx = current_idx + n_samples
-            
-            # 直接赋值到预分配的数组，使用copy确保数据独立
-            all_features[current_idx:end_idx, :7] = obj_pose.copy()
-            all_features[current_idx:end_idx, 7:14] = grasp_poses.copy()
-            all_features[current_idx:end_idx, 14:] = obj_type_onehot.copy()
-            
-            # 设置标签
-            if item[-1]:  # available_gids
-                all_labels[current_idx:end_idx][item[-1]] = 1
-            
-            # 清理临时变量
-            del obj_pos, obj_rot, obj_pose, obj_type_onehot
-            current_idx = end_idx
-        
-        # 转换为tensor并确保数据独立
-        self.all_features = torch.from_numpy(all_features.copy())
-        self.all_labels = torch.from_numpy(all_labels.copy())
-        
-        # 清理中间变量
-        del grasp_poses, all_features, all_labels
-        gc.collect()
-    
-    def __len__(self):
-        return len(self.all_features)
-    
-    def __getitem__(self, idx):
-        return self.all_features[idx], self.all_labels[idx]
-
-
 class SharedGraspEnergyDataset(Dataset):
-    def __init__(self, data, grasp_pickle_file, use_quaternion=False, device='cpu'):
+    def __init__(self, data, grasp_pickle_file, use_quaternion=False, use_stable_label=True):
         """
         Args:
             data: 数据列表，每个item包含 [[init_pos, init_rotmat], [goal_pos, goal_rotmat], init_stable_id, goal_stable_id, common_id]
             grasp_pickle_file: 抓取候选文件路径
-            use_quaternion: 是否使用四元数表示旋转
-            device: 设备类型
+            use_quaternion: 是否使用四元数表示旋转。如果为False，则使用简化的(x,y,rz)表示
+            use_stable_label: 是否使用stable_label作为特征。注意：当use_quaternion=False时必须为True
         """
+        # 参数验证
+        if not use_quaternion and not use_stable_label:
+            raise ValueError("非四元数表示(use_quaternion=False)必须使用stable_label")
+            
         self.use_quaternion = use_quaternion
-        self.device = device
+        self.use_stable_label = use_stable_label
         self.data = data
         
         # 加载抓取候选
         with open(grasp_pickle_file, 'rb') as f:
             grasp_candidates = pickle.load(f)
             
-        # 预处理抓取位姿数据
+        # 预处理抓取位姿数据 - 始终使用7维表示(pos + quaternion)
         grasp_poses = np.array([
             np.concatenate([
                 np.array(grasp.ac_pos, dtype=np.float32).flatten(),
-                self._convert_rotation(grasp.ac_rotmat)
+                R.from_matrix(grasp.ac_rotmat).as_quat()
             ]) for grasp in grasp_candidates
         ], dtype=np.float32)
         self.grasp_poses = torch.from_numpy(grasp_poses.copy())
         del grasp_poses, grasp_candidates
-            
-        # 创建物体stable_id的One-Hot编码器
-        init_types = [item[4] for item in data]  # init_stable_id
-        goal_types = [item[9] for item in data]  # goal_stable_id
-        all_types = list(set(init_types + goal_types))
-        self.obj_encoder = OneHotEncoder(sparse_output=False)
-        self.obj_encoder.fit(np.array(all_types).reshape(-1, 1))
-        del init_types, goal_types, all_types
+        
+        # 只有在使用stable_label时才创建编码器
+        if self.use_stable_label:
+            # 创建物体stable_id的One-Hot编码器
+            init_types = [item[4] for item in data]  # init_stable_id
+            goal_types = [item[9] for item in data]  # goal_stable_id
+            all_types = list(set(init_types + goal_types))
+            self.obj_encoder = OneHotEncoder(sparse_output=False)
+            self.obj_encoder.fit(np.array(all_types).reshape(-1, 1))
+            del init_types, goal_types, all_types
         
         self.prepare_data()
+    
+    def _normalize_angle(self, angle):
+        """将角度从[-π, π]归一化到[0, 1]范围"""
+        angle = (angle + np.pi) % (2 * np.pi) - np.pi
+        return (angle + np.pi) / (2 * np.pi)
+    
+    def _convert_rotation(self, rotmat):
+        """转换旋转矩阵为四元数或归一化的欧拉角"""
+        if self.use_quaternion:
+            return R.from_matrix(rotmat).as_quat()
+        else:
+            # 如果不使用四元数，只返回z轴旋转角度并归一化
+            euler = R.from_matrix(rotmat).as_euler('zxy', degrees=False)
+            return np.array([self._normalize_angle(euler[0])], dtype=np.float32)
+    
+    def _get_position(self, pos):
+        """根据表示方式返回位置信息"""
+        if self.use_quaternion:
+            return pos.copy()  # 返回完整的xyz
+        else:
+            return pos[:2].copy()  # 只返回xy
         
     def prepare_data(self):
         """准备训练数据"""
@@ -154,10 +91,19 @@ class SharedGraspEnergyDataset(Dataset):
         total_samples = len(self.data) * len(self.grasp_poses)
         
         # 计算特征维度
-        onehot_dim = len(self.obj_encoder.get_feature_names_out())
-        pose_dim = 7 if self.use_quaternion else 6  # pos(3) + rot(4或3)
-        grasp_pose_dim = self.grasp_poses.shape[1]
-        feature_dim = pose_dim * 2 + onehot_dim * 2 + grasp_pose_dim
+        if self.use_quaternion:
+            pose_dim = 7  # pos(3) + quaternion(4)
+        else:
+            pose_dim = 3  # pos(2) + normalized_rz(1)
+            
+        grasp_pose_dim = 7  # 抓取位姿始终使用7维表示
+        
+        # 根据是否使用stable_label确定特征维度
+        if self.use_stable_label:
+            onehot_dim = len(self.obj_encoder.get_feature_names_out())
+            feature_dim = pose_dim * 2 + onehot_dim * 2 + grasp_pose_dim
+        else:
+            feature_dim = pose_dim * 2 + grasp_pose_dim
         
         # 预分配数组
         all_features = np.zeros((total_samples, feature_dim), dtype=np.float32)
@@ -167,18 +113,14 @@ class SharedGraspEnergyDataset(Dataset):
         current_idx = 0
         for item in self.data:
             # 处理初始位姿
-            init_pos = np.array(item[0][0], dtype=np.float32).copy().flatten()
-            init_rot = self._convert_rotation(np.array(item[0][1], dtype=np.float32).copy())
+            init_pos = self._get_position(np.array(item[0][0], dtype=np.float32))
+            init_rot = self._convert_rotation(np.array(item[0][1], dtype=np.float32))
             init_pose = np.concatenate([init_pos, init_rot])
             
             # 处理目标位姿
-            goal_pos = np.array(item[5][0], dtype=np.float32).copy().flatten()
-            goal_rot = self._convert_rotation(np.array(item[5][1], dtype=np.float32).copy())
+            goal_pos = self._get_position(np.array(item[5][0], dtype=np.float32))
+            goal_rot = self._convert_rotation(np.array(item[5][1], dtype=np.float32))
             goal_pose = np.concatenate([goal_pos, goal_rot])
-            
-            # One-Hot编码
-            init_type_onehot = self.obj_encoder.transform([[item[4]]]).copy()
-            goal_type_onehot = self.obj_encoder.transform([[item[9]]]).copy()
             
             # 计算当前样本范围
             n_samples = len(self.grasp_poses)
@@ -186,14 +128,28 @@ class SharedGraspEnergyDataset(Dataset):
             
             # 填充特征数组
             feature_start = 0
+            
+            # 添加初始位姿
             all_features[current_idx:end_idx, feature_start:feature_start+len(init_pose)] = init_pose
             feature_start += len(init_pose)
+            
+            # 添加目标位姿
             all_features[current_idx:end_idx, feature_start:feature_start+len(goal_pose)] = goal_pose
             feature_start += len(goal_pose)
-            all_features[current_idx:end_idx, feature_start:feature_start+len(init_type_onehot[0])] = init_type_onehot
-            feature_start += len(init_type_onehot[0])
-            all_features[current_idx:end_idx, feature_start:feature_start+len(goal_type_onehot[0])] = goal_type_onehot
-            feature_start += len(goal_type_onehot[0])
+            
+            # 如果使用stable_label，添加One-Hot编码
+            if self.use_stable_label:
+                init_type_onehot = self.obj_encoder.transform([[item[4]]]).copy()
+                goal_type_onehot = self.obj_encoder.transform([[item[9]]]).copy()
+                
+                all_features[current_idx:end_idx, feature_start:feature_start+len(init_type_onehot[0])] = init_type_onehot
+                feature_start += len(init_type_onehot[0])
+                all_features[current_idx:end_idx, feature_start:feature_start+len(goal_type_onehot[0])] = goal_type_onehot
+                feature_start += len(goal_type_onehot[0])
+                
+                del init_type_onehot, goal_type_onehot
+            
+            # 添加抓取位姿
             all_features[current_idx:end_idx, feature_start:] = self.grasp_poses.numpy()
             
             # 设置标签
@@ -202,7 +158,6 @@ class SharedGraspEnergyDataset(Dataset):
             
             # 清理临时变量
             del init_pos, init_rot, init_pose, goal_pos, goal_rot, goal_pose
-            del init_type_onehot, goal_type_onehot
             current_idx = end_idx
         
         # 转换为tensor并确保数据独立
@@ -213,205 +168,11 @@ class SharedGraspEnergyDataset(Dataset):
         del all_features, all_labels
         gc.collect()
     
-    def _convert_rotation(self, rotmat):
-        """转换旋转矩阵为四元数或欧拉角"""
-        if self.use_quaternion:
-            return R.from_matrix(rotmat).as_quat()
-        return R.from_matrix(rotmat).as_euler('xyz', degrees=False)
-    
     def __len__(self):
         return len(self.all_features)
     
     def __getitem__(self, idx):
         return self.all_features[idx], self.all_labels[idx]
-
-
-class SharedGraspEnergyDatasetRefine(Dataset):
-    def __init__(self, data, grasp_pickle_file, use_quaternion=False, device='cpu'):
-        """
-        Args:
-            data: 数据列表，每个item包含 [[init_pos, init_rotmat], [goal_pos, goal_rotmat], init_stable_id, goal_stable_id, common_id]
-            grasp_pickle_file: 抓取候选文件路径
-            use_quaternion: 是否使用四元数表示旋转 (在这个精简版本中不会使用)
-            device: 设备类型
-        """
-        self.device = device
-        self.data = data
-        self.use_quaternion = use_quaternion
-        
-        # 加载抓取候选
-        with open(grasp_pickle_file, 'rb') as f:
-            grasp_candidates = pickle.load(f)
-            
-        # 预处理抓取位姿数据
-        grasp_poses = np.array([
-            np.concatenate([
-                np.array(grasp.ac_pos, dtype=np.float32).flatten(),
-                self._convert_rotation(grasp.ac_rotmat)
-            ]) for grasp in grasp_candidates
-        ], dtype=np.float32)
-        self.grasp_poses = torch.from_numpy(grasp_poses.copy())
-        del grasp_poses, grasp_candidates
-            
-        # 创建物体stable_id的One-Hot编码器
-        init_types = [item[2] for item in data]  # init_stable_id
-        goal_types = [item[3] for item in data]  # goal_stable_id
-        all_types = list(set(init_types + goal_types))
-        self.obj_encoder = OneHotEncoder(sparse_output=False)
-        self.obj_encoder.fit(np.array(all_types).reshape(-1, 1))
-        del init_types, goal_types, all_types
-        
-        self.prepare_data()
-        
-    def _normalize_angle(self, angle):
-        """
-        将角度从[-π, π]归一化到[0, 1]范围
-        """
-        # 首先确保角度在[-π, π]范围内
-        angle = (angle + np.pi) % (2 * np.pi) - np.pi
-        # 然后映射到[0, 1]
-        return (angle + np.pi) / (2 * np.pi)
-        
-    def prepare_data(self):
-        """准备训练数据"""
-        # 预先计算总样本数
-        total_samples = len(self.data) * len(self.grasp_poses)
-        
-        # 计算特征维度
-        onehot_dim = len(self.obj_encoder.get_feature_names_out())
-        pose_dim = 3  # x, y, Rz
-        grasp_pose_dim = self.grasp_poses.shape[1]
-        feature_dim = (pose_dim + onehot_dim) * 2 + grasp_pose_dim
-        
-        # 预分配数组
-        all_features = np.zeros((total_samples, feature_dim), dtype=np.float32)
-        all_labels = np.zeros(total_samples, dtype=np.float32)
-        
-        # 批量处理数据
-        current_idx = 0
-        for item in self.data:
-            # 处理初始位姿 - 只取x,y和归一化的Rz
-            init_pos = np.array(item[0][0][:2], dtype=np.float32).copy()  # 只取x,y
-            init_rot = R.from_matrix(np.array(item[0][1], dtype=np.float32)).as_euler('zxy', degrees=False)[0]  # 使用zxy顺序，取第一个分量
-            init_rot_normalized = np.round(self._normalize_angle(init_rot),3)  # 归一化到[0,1], 取3位小数
-            init_pose = np.concatenate([init_pos, [init_rot_normalized]], dtype=np.float32)
-            
-            # 处理目标位姿 - 只取x,y和归一化的Rz
-            goal_pos = np.array(item[1][0][:2], dtype=np.float32).copy()  # 只取x,y
-            goal_rot = R.from_matrix(np.array(item[1][1], dtype=np.float32)).as_euler('zxy', degrees=False)[0]  # 使用zxy顺序，取第一个分量
-            goal_rot_normalized = np.round(self._normalize_angle(goal_rot),3)  # 归一化到[0,1], 取3位小数
-            goal_pose = np.concatenate([goal_pos, [goal_rot_normalized]], dtype=np.float32)
-            
-            # One-Hot编码
-            init_type_onehot = self.obj_encoder.transform([[item[2]]]).copy()
-            goal_type_onehot = self.obj_encoder.transform([[item[3]]]).copy()
-            
-            # 计算当前样本范围
-            n_samples = len(self.grasp_poses)
-            end_idx = current_idx + n_samples
-            
-            # 填充特征数组
-            feature_start = 0
-
-            # 初始位姿特征
-            all_features[current_idx:end_idx, feature_start:feature_start+len(init_pose)] = init_pose
-            feature_start += len(init_pose)
-            all_features[current_idx:end_idx, feature_start:feature_start+len(init_type_onehot[0])] = init_type_onehot
-            feature_start += len(init_type_onehot[0])
-            
-            # 目标位姿特征
-            all_features[current_idx:end_idx, feature_start:feature_start+len(goal_pose)] = goal_pose
-            feature_start += len(goal_pose)
-            all_features[current_idx:end_idx, feature_start:feature_start+len(goal_type_onehot[0])] = goal_type_onehot
-            feature_start += len(goal_type_onehot[0])
-            
-            # 抓取位姿特征
-            all_features[current_idx:end_idx, feature_start:] = self.grasp_poses.numpy()
-            
-            # 设置标签
-            if item[4]:  # common_id
-                all_labels[current_idx:end_idx][item[4]] = 1
-            
-            # 清理临时变量
-            del init_pos, init_rot, init_pose, goal_pos, goal_rot, goal_pose
-            del init_type_onehot, goal_type_onehot
-            current_idx = end_idx
-        
-        # 转换为tensor并确保数据独立
-        self.all_features = torch.from_numpy(all_features.copy())
-        self.all_labels = torch.from_numpy(all_labels.copy())
-        
-        # 清理中间变量
-        del all_features, all_labels
-        gc.collect()
-    
-    def _convert_rotation(self, rotmat):
-        """转换旋转矩阵为四元数或归一化的欧拉角"""
-        if self.use_quaternion:
-            return R.from_matrix(rotmat).as_quat()
-        euler = R.from_matrix(rotmat).as_euler('zxy', degrees=False)  # 使用zxy顺序
-        # 只返回归一化的z轴旋转角度（第一个分量）
-        return self._normalize_angle(euler[0])
-    
-    def __len__(self):
-        return len(self.all_features)
-    
-    def __getitem__(self, idx):
-        return self.all_features[idx], self.all_labels[idx]
-
-
-class SelfAttentionFusion(nn.Module):
-    def __init__(self, dim, dropout_rate=0.1):
-        super().__init__()
-        self.q = nn.Linear(2*dim, dim)
-        self.k = nn.Linear(2*dim, dim)
-        self.v = nn.Linear(2*dim, dim)
-        self.scale = dim ** -0.5
-        self.dropout = nn.Dropout(dropout_rate)
-        
-    def forward(self, x):
-        # x shape: [batch_size, 2*dim]
-        q = self.q(x)  # [batch_size, dim]
-        k = self.k(x)  # [batch_size, dim]
-        v = self.v(x)  # [batch_size, dim]
-        
-        # 修改注意力计算方式
-        # 将向量转换为适合注意力计算的形状
-        q = q.unsqueeze(1)  # [batch_size, 1, dim]
-        k = k.unsqueeze(1)  # [batch_size, 1, dim]
-        v = v.unsqueeze(1)  # [batch_size, 1, dim]
-        
-        # 计算注意力分数
-        attn = torch.bmm(q, k.transpose(1, 2)) * self.scale  # [batch_size, 1, 1]
-        attn = F.softmax(attn, dim=-1)
-        attn = self.dropout(attn)
-        
-        # 应用注意力权重
-        out = torch.bmm(attn, v)  # [batch_size, 1, dim]
-        out = out.squeeze(1)  # [batch_size, dim]
-        
-        return out
-
-
-class ResBlock(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(dim, dim),
-            nn.LayerNorm(dim),
-            nn.ReLU(),
-            nn.Linear(dim, dim),
-            nn.LayerNorm(dim)
-        )
-        
-        # 初始化权重
-        for m in self.net.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.kaiming_uniform_(m.weight)
-                nn.init.constant_(m.bias, 0.0)
-    
-    def forward(self, x):
-        return self.net(x) + x
 
 
 class GraspEnergyNetwork(nn.Module):
@@ -457,131 +218,6 @@ class GraspEnergyNetwork(nn.Module):
 
     def forward(self, x):
         return self.model(x)
-
-
-class MultiScaleGraspEnergyNetwork(nn.Module):
-    def __init__(self, input_dim, hidden_dims=None, 
-                 num_res_blocks=2, dropout_rate=0.2):
-        super().__init__()
-        # 确保hidden_dims是列表且长度至少为3
-        if hidden_dims is None:
-            hidden_dims = [128, 256, 512]
-        elif len(hidden_dims) < 3:
-            raise ValueError("hidden_dims必须至少包含3个维度")
-            
-        self.hidden_dims = hidden_dims
-        self.input_dim = input_dim
-        obj_dim = input_dim // 2  # 7维，如果使用四元数
-        grasp_dim = input_dim - obj_dim
-        
-        # 物体姿态编码器 - 适应任意长度的hidden_dims
-        self.obj_encoders = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(obj_dim, dim),
-                nn.LayerNorm(dim),
-                nn.ReLU(),
-                nn.Dropout(dropout_rate)
-            ) for dim in hidden_dims
-        ])
-        
-        # 抓取姿态编码器
-        self.grasp_encoders = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(grasp_dim, dim),
-                nn.LayerNorm(dim),
-                nn.ReLU(),
-                nn.Dropout(dropout_rate)
-            ) for dim in hidden_dims
-        ])
-        
-        # 特征融合模块
-        self.fusion_modules = nn.ModuleList([
-            SelfAttentionFusion(dim, dropout_rate)
-            for dim in hidden_dims
-        ])
-        
-        # 残差块处理融合特征
-        self.res_blocks = nn.ModuleList([
-            nn.ModuleList([ResBlock(dim) for _ in range(num_res_blocks)])
-            for dim in hidden_dims
-        ])
-        
-        # 特征维度转换层 - 将所有特征转换到相同维度
-        target_dim = hidden_dims[-1]  # 使用最后一个维度作为目标维度
-        self.dim_transform = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(dim, target_dim),
-                nn.LayerNorm(target_dim),
-                nn.ReLU(),
-                nn.Dropout(dropout_rate)
-            ) if dim != target_dim else nn.Identity()
-            for dim in hidden_dims
-        ])
-        
-        # 修改最终特征聚合 - 不使用注意力机制
-        self.final_fusion = nn.Sequential(
-            nn.Linear(target_dim, target_dim // 2),
-            nn.LayerNorm(target_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate)
-        )
-        
-        # 能量预测头
-        self.energy_head = nn.Sequential(
-            nn.Linear(target_dim // 2, target_dim // 4),
-            nn.ReLU(),
-            nn.Linear(target_dim // 4, 1)
-        )
-        
-        self._init_weights()
-    
-    def _init_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.kaiming_normal_(m.weight)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-    
-    def forward(self, x):
-        # 分离物体姿态和抓取姿态
-        obj_pose = x[:, :7]  # 假设使用四元数
-        grasp_pose = x[:, 7:]
-        
-        # 多尺度特征提取和融合
-        multi_scale_features = []
-        
-        for i in range(len(self.hidden_dims)):
-            # 提取特征
-            obj_feat = self.obj_encoders[i](obj_pose)
-            grasp_feat = self.grasp_encoders[i](grasp_pose)
-            
-            # 拼接特征
-            combined = torch.cat([obj_feat, grasp_feat], dim=1)
-            
-            # Self-attention融合
-            fused = self.fusion_modules[i](combined)
-            
-            # 残差块处理
-            for res_block in self.res_blocks[i]:
-                fused = res_block(fused)
-            
-            # 维度转换
-            transformed = self.dim_transform[i](fused)
-            multi_scale_features.append(transformed)
-        
-        # 堆叠所有特征
-        stacked_features = torch.stack(multi_scale_features, dim=1)  # [batch_size, num_scales, dim]
-        
-        # 计算每个尺度的平均特征
-        avg_features = torch.mean(stacked_features, dim=1)  # [batch_size, dim]
-        
-        # 直接使用全连接层进行最终融合
-        final_features = self.final_fusion(avg_features)
-        
-        # 预测能量
-        energy = self.energy_head(final_features)
-        
-        return energy
 
 
 class EnergyBasedLoss(nn.Module):
@@ -1065,7 +701,7 @@ def load_raw_data(data_path, ratio=0.5):
         raw_data = pickle.load(f)
         start_idx = int(len(raw_data) * ratio)
         raw_data = raw_data[start_idx:]
-        print(f"加载数据: 总量 {len(raw_data)}, 起始比例 {ratio:.1%}")
+        print(f"加载数据: 总量 {len(raw_data)}, 起始比例 {1 - ratio:.1%}")
     return raw_data
 
 
@@ -1091,6 +727,7 @@ def create_datasets(raw_data, indices, args):
         [raw_data[i] for i in indices['train']],
         args.grasp_data_path,
         use_quaternion=args.use_quaternion,
+        use_stable_label=args.use_stable_label,
     )
 
     # 使用训练集的标准化器创建验证集和测试集
@@ -1098,12 +735,14 @@ def create_datasets(raw_data, indices, args):
         [raw_data[i] for i in indices['val']],
         args.grasp_data_path,
         use_quaternion=args.use_quaternion,
+        use_stable_label=args.use_stable_label,
     )
     
     test_dataset = SharedGraspEnergyDataset(
         [raw_data[i] for i in indices['test']],
         args.grasp_data_path,
         use_quaternion=args.use_quaternion,
+        use_stable_label=args.use_stable_label,
     )
     
     return train_dataset, val_dataset, test_dataset
@@ -1143,28 +782,39 @@ def create_data_loaders(train_dataset, val_dataset, test_dataset, args):
     return train_loader, val_loader, test_loader
 
 
-def setup_training(args, input_dim):
+def calculate_input_dim(args):
+    """根据参数计算输入维度"""
+    # 抓取位姿始终是7维 (pos + quaternion)
+    grasp_pose_dim = 7
+    
+    # 计算物体位姿维度
+    if args.use_quaternion:
+        pose_dim = 7  # pos(3) + quaternion(4)
+    else:
+        pose_dim = 3  # pos(2) + normalized_rz(1)
+    
+    # 计算稳定性标签维度
+    if args.use_stable_label:
+        stable_label_dim = 5  # 假设有5个稳定性类别
+        return pose_dim * 2 + stable_label_dim * 2 + grasp_pose_dim
+    else:
+        return pose_dim * 2 + grasp_pose_dim
+
+
+def setup_training(args):
     """设置模型、损失函数、优化器等训练组件"""
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    # 修改这里的判断
-    use_multiscale = args.multiscale_network.lower() == 'true'  # 将字符串转换为布尔值
+    # 自动计算输入维度
+    input_dim = calculate_input_dim(args)
+    print(f"计算得到的输入维度: {input_dim}")
     
-    # 初始化模型
-    if use_multiscale:
-        model = MultiScaleGraspEnergyNetwork(
-            input_dim=input_dim,
-            hidden_dims=args.hidden_dims,
-            num_res_blocks=args.num_layers,  # 使用num_layers替代num_res_blocks
-            dropout_rate=args.dropout_rate
-        )
-    else:
-        model = GraspEnergyNetwork(
-            input_dim=input_dim,
-            hidden_dims=args.hidden_dims,
-            num_layers=args.num_layers,  # 使用新参数
-            dropout_rate=args.dropout_rate
-        )
+    model = GraspEnergyNetwork(
+        input_dim=input_dim,
+        hidden_dims=args.hidden_dims,
+        num_layers=args.num_layers,
+        dropout_rate=args.dropout_rate
+    )
     
     # 初始化损失函数
     criterion = EnergyBasedLoss(temperature=args.temperature)
@@ -1209,13 +859,14 @@ def parse_args():
     parser.add_argument('--data_ratio', type=float, default=0.5)
     
     # 模型结构参数 - 更新为简化的MLP参数
-    parser.add_argument('--multiscale_network', type=str, default='False',
-                       choices=['True', 'False'])
     parser.add_argument('--input_dim', type=int, default=12)
     parser.add_argument('--hidden_dims', nargs='+', type=int, default=[512, 512, 512])
     parser.add_argument('--num_layers', type=int, default=3)  # 替换num_res_blocks
     parser.add_argument('--dropout_rate', type=float, default=0.1)
-    parser.add_argument('--use_quaternion', type=bool, default=True)
+    parser.add_argument('--use_quaternion', type=int, default=1,
+                       help='使用四元数表示 (1) 或简化表示 (0)')
+    parser.add_argument('--use_stable_label', type=int, default=1,
+                       help='使用稳定性标签 (1) 或不使用 (0)')
     
     # 训练超参数
     parser.add_argument('--batch_size', type=int, default=1024)
@@ -1238,7 +889,12 @@ def parse_args():
     parser.add_argument('--wandb_project', type=str, default='grasp_ebm')
     parser.add_argument('--wandb_name', type=str, default='grasp_random_position_bottle_robot_57_ebm_selu')
     
-    return parser.parse_args()
+    args = parser.parse_args()
+    # 将整数转换为布尔值
+    args.use_quaternion = bool(args.use_quaternion)
+    args.use_stable_label = bool(args.use_stable_label)
+    
+    return args
 
 
 def main():
@@ -1265,13 +921,8 @@ def main():
         train_dataset, val_dataset, test_dataset, args
     )
     
-    # 设置输入维度
-    n_categories = train_dataset.obj_encoder.categories_[0].shape[0]
-    input_dim = n_categories * 2 + 2 * 7 + 7
-    #input_dim = n_categories * 2 + 2 * 3 + 7
-    
     # 设置训练组件
-    model, criterion, optimizer, scheduler, device = setup_training(args, input_dim)
+    model, criterion, optimizer, scheduler, device = setup_training(args)
     
     if args.train_model:
     # 训练模型

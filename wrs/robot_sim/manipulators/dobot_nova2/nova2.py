@@ -188,13 +188,13 @@ class Nova2(mi.ManipulatorInterface):
                     q[index_i][index_j] -= 2 * np.pi
         result = q[~np.isnan(q).any(axis=1)]
         if len(result) == 0:
-            print("No valid solutions found")
+            # print("No valid solutions found")
             return None
         else:
             mask = np.all((result >= self.jnt_ranges[:, 0]) & (result <= self.jnt_ranges[:, 1]), axis=1)
             filtered_result = result[mask]
             if len(filtered_result) == 0:
-                print("No valid solutions found")
+                #print("No valid solutions found")
                 return None
             if seed_jnt_values is None:
                 seed_jnt_values = self.home_conf

@@ -23,10 +23,10 @@ grasp_collection = gpa.plan_gripper_grasps(gripper,
                                            min_thickness=.0005,
                                            toggle_dbg=False)
 print(grasp_collection)
-# grasp_collection.save_to_disk(grasp_path)
-# for grasp in grasp_collection:
-#     gripper.grip_at_by_pose(jaw_center_pos=grasp.ac_pos, jaw_center_rotmat=grasp.ac_rotmat, jaw_width=grasp.ee_values)
-#     gripper.gen_meshmodel(alpha=.1).attach_to(base)
+grasp_collection.save_to_disk(grasp_path)
+for grasp in grasp_collection:
+    gripper.grip_at_by_pose(jaw_center_pos=grasp.ac_pos, jaw_center_rotmat=grasp.ac_rotmat, jaw_width=grasp.ee_values)
+    gripper.gen_meshmodel(alpha=.1).attach_to(base)
 # base.run()
 
 counter = [0]

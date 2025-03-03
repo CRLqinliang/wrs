@@ -6,7 +6,8 @@ import gc
 import torch
 
 def run_ebm_experiment(hidden_dims, num_layers, dropout_rate, batch_size, 
-                      learning_rate, temperature, dataset_type, data_id, train_split, data_ratio, seed):
+                      learning_rate, temperature, dataset_type, data_id, 
+                      train_split, data_ratio, seed, use_quaternion, use_stable_label):
     """运行单个EBM实验"""
     # 获取当前文件的目录路径
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -20,7 +21,7 @@ def run_ebm_experiment(hidden_dims, num_layers, dropout_rate, batch_size,
         f'grasps/Bottle/bottle_grasp_{data_id}.pickle')
     
     # 构建模型保存路径
-    exp_name = f'ebm_selu_{dataset_type}_{data_id}_h{len(hidden_dims)}_{batch_size}_lr{learning_rate}_t{temperature}_dataratio_{data_ratio}_trainsplit_{train_split}'
+    exp_name = f'ebm_{dataset_type}_{data_id}_h{len(hidden_dims)}_b{batch_size}_lr{learning_rate}_t{temperature}_r{data_ratio}_s{train_split}_q{int(use_quaternion)}_sl{int(use_stable_label)}'
     model_save_path = os.path.join(f'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project',
                                    f'model/Binary_ebm_model/best_model_grasp_{exp_name}.pth')
     
@@ -31,7 +32,6 @@ def run_ebm_experiment(hidden_dims, num_layers, dropout_rate, batch_size,
         '--data_path', data_path,
         '--grasp_data_path', grasp_data_path,
         '--model_save_path', model_save_path,
-        '--multiscale_network', 'False',
         '--hidden_dims', *hidden_dims_str.split(),
         '--num_layers', str(num_layers),
         '--dropout_rate', str(dropout_rate),
@@ -44,12 +44,15 @@ def run_ebm_experiment(hidden_dims, num_layers, dropout_rate, batch_size,
         '--train_split', str(train_split),
         '--data_ratio', str(data_ratio),
         '--seed', str(seed),
+        '--use_quaternion', '1' if use_quaternion else '0',
+        '--use_stable_label', '1' if use_stable_label else '0',
         '--wandb_project', 'EBM_grasp_experiments_paper',
         '--wandb_name', exp_name
     ]
     
     print(f"\n开始训练 EBM 网络...")
     print(f"配置: hidden_dims={hidden_dims}, num_layers={num_layers}, batch_size={batch_size}, lr={learning_rate}, temp={temperature}")
+    print(f"表示方式: use_quaternion={use_quaternion}, use_stable_label={use_stable_label}")
     subprocess.run(cmd)
     print(f"EBM 网络训练完成\n")
 
@@ -59,62 +62,48 @@ def main():
     
     # 实验配置
     experiment_configs = [
-        #1. 基础SeLU结构
+        # 1. 使用四元数 + stable label
         {
-            'hidden_dims': [512, 512, 512],  # 三层相同宽度的隐藏层
-            'num_layers': 3,                 # 层数
-            'dropout_rate': 0.1,             # SeLU推荐的较低dropout
-            'batch_size': 2048,              # 较大的batch size
-            'learning_rate': 1e-3,           # SeLU适合较大的学习率
-            'temperature': 0.5               # 适中的temperature
+            'hidden_dims': [512, 512, 512],
+            'num_layers': 3,
+            'dropout_rate': 0.1,
+            'batch_size': 2048,
+            'learning_rate': 1e-3,
+            'temperature': 0.5,
+            'use_quaternion': True,
+            'use_stable_label': True
         },
         
-        # 2. 更宽的SeLU结构
+        # # 2. 使用四元数，不使用stable label
         # {
-        #     'hidden_dims': [1024, 1024, 1024],  # 更宽的隐藏层
-        #     'num_layers': 3,                    # 保持层数不变
-        #     'dropout_rate': 0.1,                # 保持较低dropout
-        #     'batch_size': 1024,                 # 减小batch size以适应更大的网络
-        #     'learning_rate': 5e-4,              # 略微降低学习率
-        #     'temperature': 0.1                  # 保持相同的temperature
+        #     'hidden_dims': [512, 512, 512],
+        #     'num_layers': 3,
+        #     'dropout_rate': 0.1,
+        #     'batch_size': 2048,
+        #     'learning_rate': 1e-3,
+        #     'temperature': 0.5,
+        #     'use_quaternion': True,
+        #     'use_stable_label': False
         # },
-        
-        # # 3. 更深的SeLU结构
+        #
+        # # 3. 使用简化表示(xy+rz) + stable label
         # {
-        #     'hidden_dims': [512, 512, 512, 512, 512],  # 五层隐藏层
-        #     'num_layers': 5,                           # 增加层数
-        #     'dropout_rate': 0.15,                      # 略微增加dropout
-        #     'batch_size': 1024,                        # 减小batch size
-        #     'learning_rate': 5e-4,                     # 降低学习率
-        #     'temperature': 0.08                        # 略微降低temperature
-        # },
-        
-        # 4. 金字塔SeLU结构
-        # {
-        #     'hidden_dims': [256, 512, 256],  # 金字塔结构
-        #     'num_layers': 3,                 # 三层结构
-        #     'dropout_rate': 0.1,             # 保持较低dropout
-        #     'batch_size': 2048,              # 较大的batch size
-        #     'learning_rate': 1e-3,           # 较大的学习率
-        #     'temperature': 0.12              # 略微增加temperature
-        # },
-        
-        # # 5. 轻量级SeLU结构
-        # {
-        #     'hidden_dims': [256, 256, 256],  # 较小的隐藏层
-        #     'num_layers': 3,                 # 保持层数不变
-        #     'dropout_rate': 0.05,            # 非常低的dropout
-        #     'batch_size': 4096,              # 更大的batch size
-        #     'learning_rate': 2e-3,           # 更大的学习率
-        #     'temperature': 0.15              # 较大的temperature
+        #     'hidden_dims': [512, 512, 512],
+        #     'num_layers': 3,
+        #     'dropout_rate': 0.1,
+        #     'batch_size': 2048,
+        #     'learning_rate': 1e-3,
+        #     'temperature': 0.5,
+        #     'use_quaternion': False,
+        #     'use_stable_label': True
         # }
     ]
     
     dataset_types = ["SharedGraspNetwork_bottle_experiment_data"]
-    dataset_ids = [57, 83, 109]
-    seeds = [42]
+    dataset_ids = [57]
+    seeds = [22]
     train_splits = [0.7] 
-    data_ratio = [0.3, 0.6, 0.9, 0.99] # 以这个比例往后的数据大小； 90% 70% 50% 30% 10% 1%
+    data_ratio = [0.95]
     
     # 运行所有实验组合
     for config in experiment_configs:
@@ -124,7 +113,6 @@ def main():
                 gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-                
                 for train_split in train_splits:
                     for seed in seeds:
                         for ratio in data_ratio:
@@ -137,11 +125,13 @@ def main():
                                 temperature=config['temperature'],
                                 dataset_type=dataset_type,
                                 data_id=data_id,
-                                train_split = train_split,
-                                data_ratio = ratio,
-                                seed=seed
+                                train_split=train_split,
+                                data_ratio=ratio,
+                                seed=seed,
+                                use_quaternion=config['use_quaternion'],
+                                use_stable_label=config['use_stable_label']
                             )
-                            time.sleep(5) # wait for RAM to be released
+                            time.sleep(2)  # 等待内存释放
 
 if __name__ == '__main__':
     main()

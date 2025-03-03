@@ -97,12 +97,12 @@ def compare_multiple_distributions(file_numbers):
     
     for num in file_numbers:
         # Load data
-        common_grasp_data_path = fr"H:\Qin\wrs\wrs\HuGroup_Qin\data\grasps\Bottle\argu_xyt_common_grasp_random_position_bottle_common_{num}.pickle"
+        common_grasp_data_path = f"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\SharedGraspNetwork_bottle_experiment_data_{num}.pickle"
         common_grasp_data = grasp_load(common_grasp_data_path)
         # Create target vectors
         target_vector_set = []
         for item in common_grasp_data:
-            target_vector_set.append(create_target_vector(num, item[2]))
+            target_vector_set.append(create_target_vector(num, item[-1]))
             
         # Analyze distribution
         result = analyze_ones_distribution(target_vector_set)
@@ -168,14 +168,14 @@ def compare_multiple_distributions(file_numbers):
 # TODO modify the detail.
 if __name__ == '__main__':
     # grasp data
-    grasp_data_path = r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\bottle_grasp_109.pickle"
+    grasp_data_path = r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\bottle_grasp_352.pickle"
     object_feasible_grasps = grasp_load(grasp_data_path)
     gripper = wrs_gripper_v3.WRSGripper3()
     # show_grasp(gripper, object_feasible_grasps)
     id_dim = len(object_feasible_grasps)
 
     # common grasp data
-    common_grasp_data_path = r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\SharedGraspNetwork_bottle_experiment_data_109.pickle"
+    common_grasp_data_path = r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\SharedGraspNetwork_bottle_experiment_data_352.pickle"
     common_grasp_data = grasp_load(common_grasp_data_path)
 
     # create target vectors
@@ -194,6 +194,6 @@ if __name__ == '__main__':
     print("每列 1 的数量：", result["ones_per_column"])
     print("每列 1 的比例：", result["column_ones_proportion"])
     
-    # 添加多文件对比分析
-    # file_numbers = [42, 57, 83, 109]
+    # # 添加多文件对比分析
+    # file_numbers = [57, 83, 109]
     # compare_multiple_distributions(file_numbers)

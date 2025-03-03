@@ -29,8 +29,8 @@ class CobottaTweezer(sari.SglArmRobotInterface):
                                           rotmat=self.manipulator.gl_flange_rotmat,
                                           name='CobottaTweezer_hnd')
         # tool center point
-        self.manipulator.jlc.loc_tcp_pos = self.end_effector.loc_acting_center_pos
-        self.manipulator.jlc.loc_tcp_rotmat = self.end_effector.loc_acting_center_rotmat
+        self.manipulator.loc_tcp_pos = self.end_effector.loc_acting_center_pos
+        self.manipulator.loc_tcp_rotmat = self.end_effector.loc_acting_center_rotmat
         # collision detection
         if self.cc is not None:
             self.setup_cc()
@@ -66,10 +66,12 @@ class CobottaTweezer(sari.SglArmRobotInterface):
     def fk(self, jnt_values, gripper_wide=None, toggle_jacobian=False, update=True):
         gl_flange_pos, gl_flange_rotmat = self._manipulator.fk(jnt_values=jnt_values, toggle_jacobian=toggle_jacobian,
                                                                update=update)
-        self.update_end_effector(gripper_wide)
-        ee_jaw_center = self.manipulator.jlc.tcp_loc_pos
-        gl_tcp_pos = gl_flange_pos + gl_flange_rotmat.dot(ee_jaw_center)
+        gl_tcp_pos = gl_flange_pos
         gl_tcp_rotmat = gl_flange_rotmat
+        self.update_end_effector(gripper_wide)
+        # ee_jaw_center = self.manipulator.jlc.tcp_loc_pos
+        # gl_tcp_pos = gl_flange_pos + gl_flange_rotmat.dot(ee_jaw_center)
+        # gl_tcp_rotmat = gl_flange_rotmat
         return (gl_tcp_pos, gl_tcp_rotmat)
 
     def gen_stickmodel(self,
@@ -78,15 +80,12 @@ class CobottaTweezer(sari.SglArmRobotInterface):
                        toggle_flange_frame=False,
                        name='cobotta_stickmodel'):
         m_col = mmc.ModelCollection(name=name)
-        self.base_plate.gen_stickmodel(toggle_jnt_frames=toggle_jnt_frames,
-                                       toggle_flange_frame=toggle_flange_frame).attach_to(m_col)
+        self.base_plate.gen_stickmodel( toggle_flange_frame=toggle_flange_frame).attach_to(m_col)
         if self._manipulator is not None:
             self._manipulator.gen_stickmodel(toggle_tcp_frame=toggle_tcp_frame,
-                                             toggle_jnt_frames=toggle_jnt_frames,
                                              toggle_flange_frame=toggle_flange_frame).attach_to(m_col)
         if self.end_effector is not None:
-            self.end_effector.gen_stickmodel(toggle_tcp_frame=toggle_tcp_frame,
-                                             toggle_jnt_frames=toggle_jnt_frames).attach_to(m_col)
+            self.end_effector.gen_stickmodel(toggle_tcp_frame=toggle_tcp_frame).attach_to(m_col)
         return m_col
 
     def gen_meshmodel(self,
