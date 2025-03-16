@@ -99,11 +99,11 @@ def main():
         # }
     ]
     
-    dataset_types = ["SharedGraspNetwork_bottle_experiment_data"]
+    dataset_types = ["SharedGraspNetwork_bottle_table_experiment_data"]
     dataset_ids = [57]
     seeds = [22]
     train_splits = [0.7] 
-    data_ratio = [0.95]
+    data_ratio = [0.95, 0.99]
     
     # 运行所有实验组合
     for config in experiment_configs:

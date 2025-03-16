@@ -1,4 +1,6 @@
 import os
+import sys
+sys.path.append("E:/Qin/wrs")
 import numpy as np
 from panda3d.core import CollisionNode, CollisionBox, Point3, NodePath
 import wrs.basis.robot_math as rm
@@ -22,7 +24,7 @@ class Nova2(mi.ManipulatorInterface):
         self.jlc.anchor.lnk_list[0].cmodel.rgba = np.array([.7, .7, .7, 1.0])
         # first joint and link
         self.jlc.jnts[0].loc_pos = np.array([.0, .0, .2234])
-        self.jlc.jnts[0].loc_motion_ax = np.array([0, 0, -1])
+        self.jlc.jnts[0].loc_motion_ax = np.array([0, 0, 1])
         self.jlc.jnts[0].motion_range = np.array([-np.pi, np.pi])
         self.jlc.jnts[0].lnk.cmodel = mcm.CollisionModel(
             initor=os.path.join(current_file_dir, "meshes", "j1.stl"), name="nova2_j1")
@@ -59,7 +61,7 @@ class Nova2(mi.ManipulatorInterface):
         self.jlc.jnts[4].lnk.cmodel.rgba = np.array([.7, .7, .7, 1.0])
         # sixth joint and link
         self.jlc.jnts[5].loc_pos = np.array([0., 0.088004, 0])
-        self.jlc.jnts[5].loc_rotmat = rm.rotmat_from_euler(-1.5708, -np.pi, 0)
+        self.jlc.jnts[5].loc_rotmat = rm.rotmat_from_euler(-1.5708, 0, 0) # (-1.5708, -np.pi, 0)
         self.jlc.jnts[5].loc_motion_ax = np.array([0, 0, 1])
         self.jlc.jnts[5].motion_range = np.array([-2 * np.pi, 2 * np.pi])
         self.jlc.jnts[5].lnk.cmodel = mcm.CollisionModel(
@@ -179,7 +181,7 @@ class Nova2(mi.ManipulatorInterface):
         # ur5 -> nova2
         q[:, 1] = q[:, 1] + np.ones(8) * np.pi / 2
         q[:, 3] = q[:, 3] + np.ones(8) * np.pi / 2
-        q[:, 0] = -q[:, 0]
+        # q[:, 0] = -q[:, 0]
         for index_i in range(8):
             for index_j in range(6):
                 if q[index_i][index_j] < self.jnt_ranges[index_j][0]:
@@ -216,9 +218,14 @@ if __name__ == '__main__':
     # arm_meshmodel.attach_to(base)
     # base.run()
 
-    random_conf = arm.rand_conf()
+    # random_conf = arm.rand_conf()
+    random_conf = np.array([-105.7156, -5.8495, 107.7660, -14.8353, -96.9777, -3.9212]) * np.pi / 180
     tgt_pos, tgt_rotmat = arm.fk(random_conf)
+    print(tgt_pos)
     mcm.mgm.gen_frame(pos=tgt_pos, rotmat=tgt_rotmat, ax_length=0.1).attach_to(base)
+    arm.goto_given_conf(jnt_values=random_conf)
+    arm.gen_meshmodel().attach_to(base)
+    # base.run()
     tic = time.time()
     jv_list = arm.ik(tgt_pos=tgt_pos, tgt_rotmat=tgt_rotmat, option="multiple")
     toc = time.time()

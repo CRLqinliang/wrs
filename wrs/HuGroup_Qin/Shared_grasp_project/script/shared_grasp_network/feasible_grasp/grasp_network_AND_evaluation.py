@@ -198,16 +198,18 @@ class SharedGraspBinaryDataset(Dataset):
                 all_features[current_idx:end_idx, feature_start:feature_start+len(init_obj_pose)] = init_obj_pose
                 feature_start += len(init_obj_pose)
                 
+                    
                 # 如果使用stable_label，添加初始状态的One-Hot编码
                 if self.use_stable_label:
                     init_stable_onehot = self.obj_encoder.transform([[init_stable_id]]).copy()
                     all_features[current_idx:end_idx, feature_start:feature_start+onehot_dim] = init_stable_onehot
                     feature_start += onehot_dim
-                    
+
                 # 添加目标状态物体位姿
                 all_features[current_idx:end_idx, feature_start:feature_start+len(goal_obj_pose)] = goal_obj_pose
                 feature_start += len(goal_obj_pose)
                 
+
                 # 如果使用stable_label，添加目标状态的One-Hot编码
                 if self.use_stable_label:
                     goal_stable_onehot = self.obj_encoder.transform([[goal_stable_id]]).copy()
@@ -291,7 +293,7 @@ class SharedGraspBinaryDataset(Dataset):
     
 
 
-def collect_model_predictions_with_mode(models, test_loader, device, mode="standard"):
+def collect_model_predictions_with_mode(models, test_loader, device, mode="standard", model_thresholds=None):
     """收集模型的预测结果，支持不同模式
     
     Args:
@@ -301,7 +303,12 @@ def collect_model_predictions_with_mode(models, test_loader, device, mode="stand
         test_loader: 测试数据加载器
         device: 计算设备
         mode: 评估模式，"standard"(两个模型) 或 "extended"(四个模型)
+        model_thresholds: 模型阈值字典
     """
+    # 检查阈值字典是否存在
+    if model_thresholds is None:
+        model_thresholds = {k: 0.5 for k in models.keys()}  # 默认所有模型阈值为0.5
+    
     # 将所有模型设置为评估模式
     for model in models.values():
         model.eval()
@@ -310,6 +317,7 @@ def collect_model_predictions_with_mode(models, test_loader, device, mode="stand
     all_probs_init = []
     all_probs_goal = []
     all_combined_probs = []
+    all_binary_preds = []  # 新增：存储二值化预测结果
 
     with torch.no_grad():
         for inputs, labels in tqdm.tqdm(test_loader, desc="收集预测结果"):
@@ -346,23 +354,45 @@ def collect_model_predictions_with_mode(models, test_loader, device, mode="stand
                 init_probs = torch.sigmoid(models['init'](init_features)).cpu().numpy()
                 goal_probs = torch.sigmoid(models['goal'](goal_features)).cpu().numpy()
                 
+                # 使用各自模型的阈值进行二值化
+                init_binary = (init_probs >= model_thresholds['init']).astype(float)
+                goal_binary = (goal_probs >= model_thresholds['goal']).astype(float)
+                
+                # 合并二值化结果（AND操作）
+                combined_binary = np.minimum(init_binary, goal_binary)
+                
                 all_probs_init.append(init_probs)
                 all_probs_goal.append(goal_probs)
+                all_binary_preds.append(combined_binary)
                 
             elif mode == "extended":
                 # 扩展模式：使用四个模型
                 robot_init_probs = torch.sigmoid(models['robot_init'](init_features)).cpu().numpy()
-                table_init_probs = torch.sigmoid(models['table_init'](goal_features)).cpu().numpy()
-                robot_goal_probs = torch.sigmoid(models['robot_goal'](init_features)).cpu().numpy()
+                table_init_probs = torch.sigmoid(models['table_init'](init_features)).cpu().numpy()
+                robot_goal_probs = torch.sigmoid(models['robot_goal'](goal_features)).cpu().numpy()
                 table_goal_probs = torch.sigmoid(models['table_goal'](goal_features)).cpu().numpy()
                 
-                # 初始状态的总概率 = robot_init AND table_init
+                # 使用各自模型的阈值进行二值化
+                robot_init_binary = (robot_init_probs >= model_thresholds['robot_init']).astype(float)
+                table_init_binary = (table_init_probs >= model_thresholds['table_init']).astype(float)
+                robot_goal_binary = (robot_goal_probs >= model_thresholds['robot_goal']).astype(float)
+                table_goal_binary = (table_goal_probs >= model_thresholds['table_goal']).astype(float)
+                
+                # 初始状态的二值化结果 = robot_init AND table_init
+                init_binary = np.minimum(robot_init_binary, table_init_binary)
+                # 目标状态的二值化结果 = robot_goal AND table_goal
+                goal_binary = np.minimum(robot_goal_binary, table_goal_binary)
+                
+                # 合并初始状态和目标状态的二值化结果
+                combined_binary = np.minimum(init_binary, goal_binary)
+                
+                # 为保持接口一致，仍然保存原始概率
                 init_probs = np.minimum(robot_init_probs, table_init_probs)
-                # 目标状态的总概率 = robot_goal AND table_goal
                 goal_probs = np.minimum(robot_goal_probs, table_goal_probs)
                 
                 all_probs_init.append(init_probs)
                 all_probs_goal.append(goal_probs)
+                all_binary_preds.append(combined_binary)
             
             all_labels.append(labels)
 
@@ -370,145 +400,85 @@ def collect_model_predictions_with_mode(models, test_loader, device, mode="stand
     all_labels = np.concatenate(all_labels)
     all_probs_init = np.concatenate(all_probs_init)
     all_probs_goal = np.concatenate(all_probs_goal)
+    all_binary_preds = np.concatenate(all_binary_preds)
     
-    # 合并初始状态和目标状态的概率（使用AND逻辑）
-    all_combined_probs = np.minimum(all_probs_init, all_probs_goal)
-    
-    return all_labels, all_probs_init, all_probs_goal, all_combined_probs
+
+    return all_labels, all_probs_init, all_probs_goal, all_combined_probs, all_binary_preds
 
 
-def evaluate_combined_threshold(all_labels, all_combined_probs, threshold):
-    """评估组合概率阈值的性能"""
-    predictions = (all_combined_probs >= threshold).astype(float)
-    
-    # 计算评估指标
-    accuracy = accuracy_score(all_labels, predictions) * 100
-    precision = precision_score(all_labels, predictions, average='binary', zero_division=0)
-    recall = recall_score(all_labels, predictions, average='binary', zero_division=0)
-    f1 = f1_score(all_labels, predictions, average='binary', zero_division=0)
-    
-    return {
-        "threshold": threshold,
-        "accuracy": accuracy,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1
-    }
-
-
-def test_AND_model_with_dataset(models, test_loader, device, thresholds, mode="standard", verbose=True):
-    """在测试集上寻找最佳阈值
+def test_AND_model_with_dataset(models, test_loader, device, thresholds=None, mode="standard", 
+                                verbose=True, model_thresholds=None):
+    """在测试集上评估模型
     
     Args:
         models: 模型字典
         test_loader: 测试数据加载器
         device: 计算设备
-        thresholds: 用于评估的概率阈值列表
+        thresholds: 不再使用，保留参数以兼容接口
         mode: 评估模式，"standard"(标准) 或 "extended"(扩展)
         verbose: 是否输出详细信息
+        model_thresholds: 模型阈值字典
     """
     # 收集模型预测
-    all_labels, all_probs_init, all_probs_goal, all_combined_probs = collect_model_predictions_with_mode(
-        models, test_loader, device, mode)
+    all_labels, all_probs_init, all_probs_goal, all_combined_probs, all_binary_preds = collect_model_predictions_with_mode(
+        models, test_loader, device, mode, model_thresholds
+    )
     
-    # 初始化结果数组
-    precision_array = np.zeros(len(thresholds))
-    recall_array = np.zeros(len(thresholds))
-    f1_array = np.zeros(len(thresholds))
-    accuracy_array = np.zeros(len(thresholds))
+    # 评估使用模型自身阈值的二值化结果
+    binary_accuracy = accuracy_score(all_labels, all_binary_preds) * 100
+    binary_precision = precision_score(all_labels, all_binary_preds, average='binary', zero_division=0)
+    binary_recall = recall_score(all_labels, all_binary_preds, average='binary', zero_division=0)
+    binary_f1 = f1_score(all_labels, all_binary_preds, average='binary', zero_division=0)
     
-    # 存储所有结果
-    results_data = []
+    print("\n使用模型自身阈值的二值化结果:")
+    print(f"Accuracy: {binary_accuracy:.2f}%")
+    print(f"Precision: {binary_precision:.4f}, Recall: {binary_recall:.4f}, F1: {binary_f1:.4f}")
     
-    # 初始化最佳结果跟踪
-    best_f1 = -1
-    best_threshold = 0
-    best_results = None
+    # 创建结果字典
+    binary_results = {
+        "threshold": "model_optimal",
+        "accuracy": binary_accuracy,
+        "binary_precision": binary_precision,
+        "binary_recall": binary_recall,
+        "binary_f1": binary_f1
+    }
     
-    # 遍历阈值
-    for i, threshold in enumerate(tqdm.tqdm(thresholds, desc="测试阈值")):
-        # 评估当前阈值
-        results = evaluate_combined_threshold(
-            all_labels, all_combined_probs, threshold
-        )
+    # 可视化混淆矩阵
+    if verbose:
+        from sklearn.metrics import confusion_matrix
+        import matplotlib.pyplot as plt
         
-        # 记录结果
-        precision_array[i] = results['precision']
-        recall_array[i] = results['recall']
-        f1_array[i] = results['f1']
-        accuracy_array[i] = results['accuracy']
+        cm = confusion_matrix(all_labels, all_binary_preds)
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+        plt.xlabel('Predicted')
+        plt.ylabel('True')
+        plt.title('Confusion Matrix')
         
-        results_data.append([threshold, results['accuracy'], results['precision'], 
-                           results['recall'], results['f1']])
+        # 确保output/plots目录存在
+        os.makedirs('output/plots', exist_ok=True)
+        plt_path = f'output/plots/confusion_matrix_{mode}.png'
+        plt.savefig(plt_path)
         
-        # 更新最佳结果
-        if results['f1'] > best_f1:
-            best_f1 = results['f1']
-            best_threshold = threshold
-            best_results = results
-
-        # 输出当前结果
-        if verbose and i % 5 == 0:
-            print(f"\nThreshold = {threshold:.2f}:")
-            print(f"Accuracy: {results['accuracy']:.2f}%")
-            print(f"Precision: {results['precision']:.4f}, "
-                  f"Recall: {results['recall']:.4f}, "
-                  f"F1: {results['f1']:.4f}")
-
-    # 可视化F1分数随阈值变化
-    plt.figure(figsize=(10, 6))
-    plt.plot(thresholds, f1_array, marker='o', linestyle='-', color='blue')
-    plt.axvline(x=best_threshold, color='red', linestyle='--', label=f'Best Threshold: {best_threshold:.3f}')
-    plt.grid(True)
-    plt.xlabel('Combined Probability Threshold')
-    plt.ylabel('F1 Score')
-    plt.title('F1 Score vs Combined Probability Threshold (Test Set)')
-    plt.legend()
+        # 如果wandb可用，记录结果
+        if wandb.run is not None:
+            wandb.log({
+                "binary_f1": binary_f1,
+                "binary_precision": binary_precision,
+                "binary_recall": binary_recall, 
+                "binary_accuracy": binary_accuracy,
+                "confusion_matrix": wandb.Image(plt_path)
+            })
     
-    # 确保output/plots目录存在
-    os.makedirs('output/plots', exist_ok=True)
-    plt_path = f'output/plots/f1_vs_threshold_{mode}.png'
-    plt.savefig(plt_path)
-    
-    # 如果wandb可用，记录结果
-    if wandb.run is not None:
-        wandb.log({
-            "test_best_f1": best_f1,
-            "best_threshold": best_threshold,
-            "test_precision_vs_threshold": wandb.plot.line_series(
-                xs=thresholds.tolist(),
-                ys=[precision_array.tolist()],
-                keys=["Precision"],
-                title="Test Precision vs Threshold",
-                xname="Threshold"
-            ),
-            "test_recall_vs_threshold": wandb.plot.line_series(
-                xs=thresholds.tolist(),
-                ys=[recall_array.tolist()],
-                keys=["Recall"],
-                title="Test Recall vs Threshold",
-                xname="Threshold"
-            ),
-            "test_f1_vs_threshold": wandb.plot.line_series(
-                xs=thresholds.tolist(),
-                ys=[f1_array.tolist()],
-                keys=["F1"],
-                title="Test F1 vs Threshold",
-                xname="Threshold"
-            ),
-            "test_f1_vs_threshold_plot": wandb.Image(plt_path)
-        })
-
-
+    # 返回结果
     threshold_results = {
-        'precision': precision_array,
-        'recall': recall_array,
-        'f1': f1_array,
-        'accuracy': accuracy_array,
-        'thresholds': thresholds
+        'binary_results': binary_results,
+        'binary_preds': all_binary_preds,
+        'true_labels': all_labels
     }
 
-    return best_threshold, best_results, threshold_results
+    return "model_optimal", binary_results, threshold_results
+
 
 
 def load_raw_data(data_path, data_ratio=0.5):
@@ -569,6 +539,255 @@ def split_data_indices(data_len, train_split=0.7, val_split=0.15, seed=42):
     }
 
 
+def find_optimal_threshold_with_pr_curve(models, val_loader, device, mode="standard"):
+    """使用PR曲线寻找最佳F1分数对应的阈值
+    
+    Args:
+        models: 模型字典
+        val_loader: 验证数据加载器
+        device: 计算设备
+        mode: 评估模式，"standard"(两个模型) 或 "extended"(四个模型)
+    
+    Returns:
+        dict: 每个模型的最佳阈值
+    """
+    from sklearn.metrics import precision_recall_curve, f1_score
+    
+    # 将所有模型设置为评估模式
+    for model in models.values():
+        model.eval()
+    
+    # 收集验证集上的预测结果
+    all_labels = []
+    model_predictions = {model_name: [] for model_name in models.keys()}
+    
+    with torch.no_grad():
+        for inputs, labels in tqdm.tqdm(val_loader, desc="收集验证集预测结果"):
+            inputs = inputs.to(device).float()
+            labels = labels.cpu().numpy()
+            
+            # 判断是否使用quaternion表示
+            feature_dim = inputs.shape[1]
+
+            # 确定各部分的维度
+            obj_pose_dim = 7 
+            stable_dim = 5  # 假设stable label的one-hot编码维度为5
+            grasp_pose_dim = 7  # 抓取位姿始终为7维
+            
+            # 计算各部分在特征中的位置
+            init_pose_end = obj_pose_dim
+            init_stable_end = init_pose_end + stable_dim
+            goal_pose_end = init_stable_end + obj_pose_dim
+            goal_stable_end = goal_pose_end + stable_dim
+            
+            # 提取各个部分的特征
+            init_obj_pose = inputs[:, :init_pose_end]
+            init_stable = inputs[:, init_pose_end:init_stable_end]
+            goal_obj_pose = inputs[:, init_stable_end:goal_pose_end]
+            goal_stable = inputs[:, goal_pose_end:goal_stable_end]
+            grasp_pose = inputs[:, goal_stable_end:]
+            
+            # 构建初始状态和目标状态的特征输入
+            init_features = torch.cat([init_obj_pose, init_stable, grasp_pose], dim=1)
+            goal_features = torch.cat([goal_obj_pose, goal_stable, grasp_pose], dim=1)
+            
+            if mode == "standard":
+                # 标准模式：使用两个模型
+                model_predictions['init'].append(torch.sigmoid(models['init'](init_features)).cpu().numpy())
+                model_predictions['goal'].append(torch.sigmoid(models['goal'](goal_features)).cpu().numpy())
+                
+            elif mode == "extended":
+                # 扩展模式：使用四个模型
+                model_predictions['robot_init'].append(torch.sigmoid(models['robot_init'](init_features)).cpu().numpy())
+                model_predictions['table_init'].append(torch.sigmoid(models['table_init'](init_features)).cpu().numpy())
+                model_predictions['robot_goal'].append(torch.sigmoid(models['robot_goal'](goal_features)).cpu().numpy())
+                model_predictions['table_goal'].append(torch.sigmoid(models['table_goal'](goal_features)).cpu().numpy())
+            
+            all_labels.append(labels)
+    
+    # 合并所有批次的预测结果
+    all_labels = np.concatenate(all_labels)
+    for model_name in model_predictions:
+        model_predictions[model_name] = np.concatenate(model_predictions[model_name])
+    
+    # 为每个模型寻找最佳阈值
+    optimal_thresholds = {}
+    
+    for model_name, predictions in model_predictions.items():
+        # 使用PR曲线寻找最佳阈值
+        precision, recall, thresholds = precision_recall_curve(all_labels, predictions)
+        
+        # 计算每个阈值对应的F1分数
+        # 注意：precision_recall_curve返回的thresholds比precision和recall少一个元素
+        # 所以我们需要在thresholds末尾添加一个0，以匹配precision和recall的长度
+        thresholds = np.append(thresholds, 0)
+        
+        # 计算F1分数 (2 * precision * recall) / (precision + recall)
+        # 避免除零错误
+        f1_scores = np.zeros_like(precision)
+        valid_indices = (precision + recall) > 0
+        f1_scores[valid_indices] = 2 * (precision[valid_indices] * recall[valid_indices]) / (precision[valid_indices] + recall[valid_indices])
+        
+        # 找到最大F1分数对应的索引
+        best_idx = np.argmax(f1_scores)
+        best_threshold = thresholds[best_idx]
+        best_f1 = f1_scores[best_idx]
+        
+        optimal_thresholds[model_name] = best_threshold
+        print(f"模型 {model_name} 的最佳阈值: {best_threshold:.4f}, F1分数: {best_f1:.4f}")
+        
+
+    return optimal_thresholds
+
+
+def test_AND_model_with_optimal_threshold(models, val_loader, test_loader, device, mode="standard", verbose=True):
+    """使用验证集上找到的最佳阈值在测试集上评估模型
+    
+    Args:
+        models: 模型字典
+        val_loader: 验证数据加载器
+        test_loader: 测试数据加载器
+        device: 计算设备
+        mode: 评估模式，"standard"(标准) 或 "extended"(扩展)
+        verbose: 是否输出详细信息
+    
+    Returns:
+        tuple: (最佳阈值字典, 评估结果, 详细结果)
+    """
+    # 在验证集上寻找最佳阈值
+    print("\n在验证集上寻找最佳阈值...")
+    optimal_thresholds = find_optimal_threshold_with_pr_curve(models, val_loader, device, mode)
+    
+    # 在测试集上使用最佳阈值评估模型
+    print("\n使用最佳阈值在测试集上评估模型...")
+    _, best_results, threshold_results = test_AND_model_with_dataset(
+        models, test_loader, device, mode=mode, model_thresholds=optimal_thresholds
+    )
+    
+    # 输出结果
+    print("\n使用验证集优化阈值的测试结果:")
+    print(f"最佳阈值: {optimal_thresholds}")
+    print(f"准确率: {best_results['accuracy']:.2f}%")
+    print(f"Binary_Precision: {best_results['binary_precision']:.4f}")
+    print(f"Binary_Recall: {best_results['binary_recall']:.4f}")
+    print(f"Binary_F1 Score: {best_results['binary_f1']:.4f}")
+    
+    # 可视化混淆矩阵
+    if verbose:
+        from sklearn.metrics import confusion_matrix
+        import matplotlib.pyplot as plt
+        
+        cm = confusion_matrix(threshold_results['true_labels'], threshold_results['binary_preds'])
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+        plt.xlabel('Predicted')
+        plt.ylabel('True')
+        plt.title('Confusion Matrix (Optimal Threshold)')
+        
+        # 确保output/plots目录存在
+        os.makedirs('output/plots', exist_ok=True)
+        plt_path = f'output/plots/confusion_matrix_optimal_{mode}.png'
+        plt.savefig(plt_path)
+        
+        # 如果wandb可用，记录结果
+        if wandb.run is not None:
+            wandb.log({
+                "optimal_f1": best_results['binary_f1'],
+                "optimal_precision": best_results['binary_precision'],
+                "optimal_recall": best_results['binary_recall'], 
+                "optimal_accuracy": best_results['accuracy'],
+                "optimal_confusion_matrix": wandb.Image(plt_path),
+                "optimal_thresholds": optimal_thresholds
+            })
+    
+    return optimal_thresholds, best_results, threshold_results
+
+
+def parse_args():
+    """解析命令行参数"""
+    parser = argparse.ArgumentParser(description='二分类抓取网络AND评估')
+    
+    # 数据参数
+    parser.add_argument('--dataset', type=str, default=r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\SharedGraspNetwork_bottle_experiment_data_922.pickle",
+                        help='数据集路径')
+    parser.add_argument('--grasp_pickle_file', type=str,  default=r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\bottle_grasp_922.pickle",
+                        help='抓取候选文件路径')
+    
+    # 模型模式参数
+    parser.add_argument('--model_mode', type=str, default='standard',
+                        choices=['standard', 'extended'],
+                        help='模型评估模式: standard(两个模型) 或 extended(四个模型)')
+    
+    # 标准模式的模型路径
+    parser.add_argument('--model_init_path', type=str, default=r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\feasible_best_model\best_model_grasp_BC_SharedGraspNetwork_bottle_experiment_data_352_h3_b2048_lr0.001_r75000_s0.7_q1_sl1_seed42.pth",
+                        help='初始状态模型路径 (标准模式)')
+    parser.add_argument('--model_goal_path', type=str, default=r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\feasible_best_model\best_model_grasp_BC_SharedGraspNetwork_bottle_experiment_data_352_h3_b2048_lr0.001_r75000_s0.7_q1_sl1_seed42.pth",
+                        help='目标状态模型路径 (标准模式)')
+    
+    # 扩展模式的模型路径
+    parser.add_argument('--model_robot_init_path', type=str, default=None,
+                        help='robot初始状态模型路径 (扩展模式)')
+    parser.add_argument('--model_table_init_path', type=str, default=None,
+                        help='table初始状态模型路径 (扩展模式)')
+    parser.add_argument('--model_robot_goal_path', type=str, default=None,
+                        help='robot目标状态模型路径 (扩展模式)')
+    parser.add_argument('--model_table_goal_path', type=str, default=None,
+                        help='table目标状态模型路径 (扩展模式)')
+    
+    # 数据集参数
+    parser.add_argument('--val_split', type=float, default=0.5,
+                        help='验证集比例')
+    parser.add_argument('--test_split', type=float, default=0.5,
+                        help='测试集比例')
+    parser.add_argument('--batch_size', type=int, default=1024,
+                        help='批量大小')
+    parser.add_argument('--data_ratio', type=float, default=0.7,
+                        help='数据比例')
+    parser.add_argument('--use_quaternion', type=int, default=1,
+                        help='使用四元数 (1) 或欧拉角 (0)')
+    parser.add_argument('--use_stable_label', type=int, default=1,
+                        help='使用稳定性标签 (1) 或不使用 (0)')
+    parser.add_argument('--grasp_type', type=str, default='robot_table',
+                        choices=['robot_table', 'table', 'robot'],
+                        help='使用哪种抓取类型')
+    parser.add_argument('--state_type', type=str, default='both',
+                        choices=['both', 'init', 'goal'],
+                        help='使用哪种状态类型')
+    
+    # 模型参数
+    parser.add_argument('--input_dim', type=int, default=6,
+                        help='输入维度')
+    parser.add_argument('--hidden_dims', nargs='+', type=int, default=[512, 512, 512],
+                        help='隐藏层维度')
+    parser.add_argument('--num_layers', type=int, default=3,
+                        help='网络层数')
+    parser.add_argument('--dropout_rate', type=float, default=0.1,
+                        help='Dropout率')
+    
+    # wandb参数
+    parser.add_argument('--wandb_project', type=str, default='bc_grasp_AND_evaluation',
+                        help='wandb项目名称')
+    parser.add_argument('--wandb_name', type=str, default='bc_and_evaluation',
+                        help='wandb运行名称')
+    parser.add_argument('--no_wandb', type=bool, default=True,
+                        help='不使用wandb记录')
+    
+    # 随机种子
+    parser.add_argument('--seed', type=int, default=42,
+                        help='随机种子')
+    
+    
+    # 新增：使用验证集优化阈值
+    parser.add_argument('--use_optimal_threshold', type=bool, default=False,
+                       help='使用验证集优化阈值')
+    
+    args = parser.parse_args()
+    args.use_quaternion = bool(args.use_quaternion)
+    args.use_stable_label = bool(args.use_stable_label)
+    
+    return args
+
+
 def main():
     # 解析命令行参数
     args = parse_args()
@@ -584,20 +803,70 @@ def main():
     
     # 加载数据
     print("\n加载数据...")
-    raw_data = load_raw_data(args.test_dataset, args.data_ratio)
+    raw_data = load_raw_data(args.dataset, args.data_ratio)
     
-    # 创建数据集
-    print("\n创建数据集...")
-    test_dataset = SharedGraspBinaryDataset(
-        raw_data,
+    # 划分数据集
+    print("\n划分数据集...")
+    data_len = len(raw_data)
+    
+    # 计算验证集和测试集大小
+    val_size = int(args.val_split * data_len)
+    test_size = int(args.test_split * data_len)
+    
+    # 确保验证集和测试集大小不超过数据总量
+    if val_size + test_size > data_len:
+        print(f"警告: 验证集({val_size})和测试集({test_size})总和超过数据总量({data_len})")
+        # 按比例调整
+        total = args.val_split + args.test_split
+        val_size = int((args.val_split / total) * data_len * 0.9)  # 留10%余量
+        test_size = int((args.test_split / total) * data_len * 0.9)
+        print(f"调整后: 验证集({val_size}), 测试集({test_size})")
+    
+    # 使用随机种子确保可重复性
+    generator = torch.Generator().manual_seed(args.seed)
+    
+    # 随机划分数据集
+    indices = torch.randperm(data_len, generator=generator).tolist()
+    val_indices = indices[:val_size]
+    test_indices = indices[val_size:val_size+test_size]
+    
+    # 创建验证集和测试集
+    val_data = [raw_data[i] for i in val_indices]
+    test_data = [raw_data[i] for i in test_indices]
+    
+    print(f"数据集划分: 总数据 {data_len}, 验证集 {len(val_data)}, 测试集 {len(test_data)}")
+    
+    # 创建验证数据集
+    print("\n创建验证数据集...")
+    val_dataset = SharedGraspBinaryDataset(
+        val_data,
         args.grasp_pickle_file,
         use_quaternion=args.use_quaternion,
         use_stable_label=args.use_stable_label,
         grasp_type=args.grasp_type,
-        state_type='both'
+        state_type=args.state_type
+    )
+    
+    # 创建测试数据集
+    print("\n创建测试数据集...")
+    test_dataset = SharedGraspBinaryDataset(
+        test_data,
+        args.grasp_pickle_file,
+        use_quaternion=args.use_quaternion,
+        use_stable_label=args.use_stable_label,
+        grasp_type=args.grasp_type,
+        state_type=args.state_type
     )
     
     # 创建数据加载器
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=2,
+        pin_memory=True
+    )
+    
     test_loader = DataLoader(
         test_dataset,
         batch_size=args.batch_size,
@@ -607,11 +876,12 @@ def main():
     )
     
     # 清理不再需要的变量
-    del raw_data
+    del raw_data, val_data, test_data
     gc.collect()
     
     # 初始化模型
     models = {}
+    model_thresholds = {}  # 存储每个模型的optimal_threshold
     
     if args.model_mode == 'standard':
         # 标准模式：加载两个模型(init和goal)
@@ -650,18 +920,22 @@ def main():
             num_layers=args.num_layers,
             dropout_rate=args.dropout_rate,
         )
-        # 加载模型权重
+        # 加载模型权重和阈值
         
         checkpoint_init = torch.load(args.model_init_path, map_location=device)
         models['init'].load_state_dict(checkpoint_init['model_state_dict'])
         models['init'] = models['init'].to(device).float()
+        # 加载optimal_threshold，如果不存在则使用默认值0.5
+        model_thresholds['init'] = checkpoint_init.get('optimal_threshold', 0.5)
         
         checkpoint_goal = torch.load(args.model_goal_path, map_location=device)
         models['goal'].load_state_dict(checkpoint_goal['model_state_dict'])
         models['goal'] = models['goal'].to(device).float()
+        # 加载optimal_threshold，如果不存在则使用默认值0.5
+        model_thresholds['goal'] = checkpoint_goal.get('optimal_threshold', 0.5)
         
-        print(f"已加载初始状态模型: {os.path.basename(args.model_init_path)}")
-        print(f"已加载目标状态模型: {os.path.basename(args.model_goal_path)}")
+        print(f"已加载初始状态模型: {os.path.basename(args.model_init_path)}, 阈值: {model_thresholds['init']}")
+        print(f"已加载目标状态模型: {os.path.basename(args.model_goal_path)}, 阈值: {model_thresholds['goal']}")
         
     elif args.model_mode == 'extended':
         # 扩展模式：加载四个模型
@@ -695,39 +969,55 @@ def main():
             input_dim=input_dim, 
             hidden_dims=args.hidden_dims,
             num_layers=args.num_layers,
-            dropout_rate=args.dropout_rate,
-            output_dim=1
+            dropout_rate=args.dropout_rate
         )
         
         models['table_init'] = GraspNetwork(
             input_dim=input_dim, 
             hidden_dims=args.hidden_dims,
             num_layers=args.num_layers,
-            dropout_rate=args.dropout_rate,
-            output_dim=1
+            dropout_rate=args.dropout_rate
         )
         
         models['robot_goal'] = GraspNetwork(
             input_dim=input_dim, 
             hidden_dims=args.hidden_dims,
             num_layers=args.num_layers,
-            dropout_rate=args.dropout_rate,
-            output_dim=1
+            dropout_rate=args.dropout_rate
         )
         
         models['table_goal'] = GraspNetwork(
             input_dim=input_dim, 
             hidden_dims=args.hidden_dims,
             num_layers=args.num_layers,
-            dropout_rate=args.dropout_rate,
-            output_dim=1
+            dropout_rate=args.dropout_rate
         )
         
-        # 加载模型权重
-        models['robot_init'].load_state_dict(torch.load(args.model_robot_init_path, map_location=device))
-        models['table_init'].load_state_dict(torch.load(args.model_table_init_path, map_location=device))
-        models['robot_goal'].load_state_dict(torch.load(args.model_robot_goal_path, map_location=device))
-        models['table_goal'].load_state_dict(torch.load(args.model_table_goal_path, map_location=device))
+        # 加载模型权重和阈值
+        checkpoint_robot_init = torch.load(args.model_robot_init_path, map_location=device)
+        models['robot_init'].load_state_dict(checkpoint_robot_init['model_state_dict'])
+        models['robot_init'] = models['robot_init'].to(device).float()
+        # 加载optimal_threshold，如果不存在则使用默认值0.5
+        model_thresholds['robot_init'] = checkpoint_robot_init.get('optimal_threshold', 0.5)
+
+        checkpoint_table_init = torch.load(args.model_table_init_path, map_location=device)
+        models['table_init'].load_state_dict(checkpoint_table_init['model_state_dict'])
+        models['table_init'] = models['table_init'].to(device).float()
+        # 加载optimal_threshold，如果不存在则使用默认值0.5
+        model_thresholds['table_init'] = checkpoint_table_init.get('optimal_threshold', 0.5)
+
+        checkpoint_robot_goal = torch.load(args.model_robot_goal_path, map_location=device)
+        models['robot_goal'].load_state_dict(checkpoint_robot_goal['model_state_dict'])
+        models['robot_goal'] = models['robot_goal'].to(device).float()
+        # 加载optimal_threshold，如果不存在则使用默认值0.5
+        model_thresholds['robot_goal'] = checkpoint_robot_goal.get('optimal_threshold', 0.5)
+
+        checkpoint_table_goal = torch.load(args.model_table_goal_path, map_location=device)
+        models['table_goal'].load_state_dict(checkpoint_table_goal['model_state_dict'])
+        models['table_goal'] = models['table_goal'].to(device).float()
+        # 加载optimal_threshold，如果不存在则使用默认值0.5
+        model_thresholds['table_goal'] = checkpoint_table_goal.get('optimal_threshold', 0.5)
+
         
         # 将模型移至设备并设置为评估模式
         models['robot_init'] = models['robot_init'].to(device).eval()
@@ -735,49 +1025,79 @@ def main():
         models['robot_goal'] = models['robot_goal'].to(device).eval()
         models['table_goal'] = models['table_goal'].to(device).eval()
         
-        print(f"已加载Robot初始状态模型: {os.path.basename(args.model_robot_init_path)}")
-        print(f"已加载Table初始状态模型: {os.path.basename(args.model_table_init_path)}")
-        print(f"已加载Robot目标状态模型: {os.path.basename(args.model_robot_goal_path)}")
-        print(f"已加载Table目标状态模型: {os.path.basename(args.model_table_goal_path)}")
+        print(f"已加载Robot初始状态模型: {os.path.basename(args.model_robot_init_path)}, 阈值: {model_thresholds['robot_init']}")
+        print(f"已加载Table初始状态模型: {os.path.basename(args.model_table_init_path)}, 阈值: {model_thresholds['table_init']}")
+        print(f"已加载Robot目标状态模型: {os.path.basename(args.model_robot_goal_path)}, 阈值: {model_thresholds['robot_goal']}")
+        print(f"已加载Table目标状态模型: {os.path.basename(args.model_table_goal_path)}, 阈值: {model_thresholds['table_goal']}")
     
-    # 设置阈值范围
-    thresholds = np.arange(0.1, 0.9, 0.02)
-    
+
     # 初始化wandb
     if not args.no_wandb:
         wandb.init(project=args.wandb_project, name=args.wandb_name, config=vars(args))
     
-    # 寻找最佳阈值
-    print("\n在测试集上寻找最佳阈值...")
-    best_threshold, best_results, threshold_results = test_AND_model_with_dataset(
-        models, test_loader, device, thresholds, mode=args.model_mode
-    )
+    # 评估模型性能
+    print("\n评估模型性能...")
     
-    # 输出最佳结果
-    print("\n测试集上的最佳结果:")
-    print(f"阈值: {best_threshold:.3f}")
-    print(f"准确率: {best_results['accuracy']:.2f}%")
-    print(f"Precision: {best_results['precision']:.4f}")
-    print(f"Recall: {best_results['recall']:.4f}")
-    print(f"F1 Score: {best_results['f1']:.4f}")
-    
-    # 记录最终结果
-    if not args.no_wandb:
-        wandb.log({
-            "final_best_threshold": best_threshold,
-            "final_accuracy": best_results['accuracy'],
-            "final_precision": best_results['precision'],
-            "final_recall": best_results['recall'],
-            "final_f1": best_results['f1']
-        })
-    
-    # 将结果保存到文件
-    results_summary = {
-        'best_threshold': best_threshold,
-        'best_results': best_results,
-        'threshold_results': threshold_results,
-        'config': vars(args)
-    }
+    # 根据是否使用验证集优化阈值选择评估方法
+    if args.use_optimal_threshold:
+        # 使用验证集优化阈值
+        optimal_thresholds, best_results, threshold_results = test_AND_model_with_optimal_threshold(
+            models, val_loader, test_loader, device, mode=args.model_mode
+        )
+        
+        # 记录最终结果
+        if not args.no_wandb:
+            wandb.log({
+                "final_optimal_thresholds": optimal_thresholds,
+                "final_accuracy": best_results['accuracy'],
+                "final_precision": best_results['binary_precision'],
+                "final_recall": best_results['binary_recall'],
+                "final_f1": best_results['binary_f1']
+            })
+        
+        # 将结果保存到文件
+        results_summary = {
+            'optimal_thresholds': optimal_thresholds,
+            'best_results': best_results,
+            'threshold_results': threshold_results,
+            'config': vars(args)
+        }
+    else:
+        # 使用模型自身阈值
+        best_threshold, best_results, threshold_results = test_AND_model_with_dataset(
+            models, test_loader, device, mode=args.model_mode, model_thresholds=model_thresholds
+        )
+        
+        # 输出结果
+        print("\n测试集上的结果:")
+        print(f"使用模型自身最佳阈值")
+        print(f"准确率: {best_results['accuracy']:.2f}%")
+        print(f"Binary_Precision: {best_results['binary_precision']:.4f}")
+        print(f"Binary_Recall: {best_results['binary_recall']:.4f}")
+        print(f"Binary_F1 Score: {best_results['binary_f1']:.4f}")
+        
+        # 记录最终结果
+        if not args.no_wandb:
+            if isinstance(best_threshold, str):
+                threshold_value = best_threshold  # 如果是字符串，直接使用
+            else:
+                threshold_value = float(best_threshold)  # 否则转换为浮点数
+                
+            wandb.log({
+                "final_best_threshold": threshold_value,
+                "final_accuracy": best_results['accuracy'],
+                "final_precision": best_results['binary_precision'],
+                "final_recall": best_results['binary_recall'],
+                "final_f1": best_results['binary_f1']
+            })
+        
+        # 将结果保存到文件
+        results_summary = {
+            'best_threshold': best_threshold,
+            'best_results': best_results,
+            'threshold_results': threshold_results,
+            'config': vars(args)
+        }
     
     # 创建输出目录
     os.makedirs('output/BC_AND_evaluation', exist_ok=True)
@@ -788,81 +1108,6 @@ def main():
         pickle.dump(results_summary, f)
     
     print(f"\n结果已保存到 {result_file}")
-
-
-def parse_args():
-    """解析命令行参数"""
-    parser = argparse.ArgumentParser(description='二分类抓取网络AND评估')
-    
-    # 数据参数
-    parser.add_argument('--test_dataset', type=str, required=True,
-                        help='测试数据集路径')
-    parser.add_argument('--grasp_pickle_file', type=str, required=True,
-                        help='抓取候选文件路径')
-    
-    # 模型模式参数
-    parser.add_argument('--model_mode', type=str, default='standard',
-                        choices=['standard', 'extended'],
-                        help='模型评估模式: standard(两个模型) 或 extended(四个模型)')
-    
-    # 标准模式的模型路径
-    parser.add_argument('--model_init_path', type=str, default=None,
-                        help='初始状态模型路径 (标准模式)')
-    parser.add_argument('--model_goal_path', type=str, default=None,
-                        help='目标状态模型路径 (标准模式)')
-    
-    # 扩展模式的模型路径
-    parser.add_argument('--model_robot_init_path', type=str, default=None,
-                        help='robot初始状态模型路径 (扩展模式)')
-    parser.add_argument('--model_table_init_path', type=str, default=None,
-                        help='table初始状态模型路径 (扩展模式)')
-    parser.add_argument('--model_robot_goal_path', type=str, default=None,
-                        help='robot目标状态模型路径 (扩展模式)')
-    parser.add_argument('--model_table_goal_path', type=str, default=None,
-                        help='table目标状态模型路径 (扩展模式)')
-    
-    # 数据集参数
-    parser.add_argument('--train_split', type=float, default=0.7,
-                        help='训练集比例')
-    parser.add_argument('--batch_size', type=int, default=256,
-                        help='批量大小')
-    parser.add_argument('--data_ratio', type=float, default=0.5,
-                        help='数据比例')
-    parser.add_argument('--use_quaternion', type=int, default=1,
-                        help='使用四元数 (1) 或欧拉角 (0)')
-    parser.add_argument('--use_stable_label', type=int, default=1,
-                        help='使用稳定性标签 (1) 或不使用 (0)')
-    parser.add_argument('--grasp_type', type=str, default='robot_table',
-                        choices=['robot_table', 'table', 'robot'],
-                        help='使用哪种抓取类型')
-    
-    # 模型参数
-    parser.add_argument('--input_dim', type=int, default=6,
-                        help='输入维度')
-    parser.add_argument('--hidden_dims', nargs='+', type=int, default=[256, 256],
-                        help='隐藏层维度')
-    parser.add_argument('--num_layers', type=int, default=2,
-                        help='网络层数')
-    parser.add_argument('--dropout_rate', type=float, default=0.1,
-                        help='Dropout率')
-    
-    # wandb参数
-    parser.add_argument('--wandb_project', type=str, default='bc_grasp_AND_evaluation',
-                        help='wandb项目名称')
-    parser.add_argument('--wandb_name', type=str, default='bc_and_evaluation',
-                        help='wandb运行名称')
-    parser.add_argument('--no_wandb', action='store_true',
-                        help='不使用wandb记录')
-    
-    # 随机种子
-    parser.add_argument('--seed', type=int, default=42,
-                        help='随机种子')
-    
-    args = parser.parse_args()
-    args.use_quaternion = bool(args.use_quaternion)
-    args.use_stable_label = bool(args.use_stable_label)
-    
-    return args
 
 
 if __name__ == '__main__':

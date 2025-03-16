@@ -22,7 +22,7 @@ def run_grasp_experiment(hidden_dims, num_layers, dropout_rate, batch_size,
         f'grasps/Bottle/bottle_grasp_{data_id}.pickle')
     
     # 构建模型保存路径
-    exp_name = f'BC_feasible_{dataset_type}_{data_id}_h{len(hidden_dims)}_b{batch_size}_lr{learning_rate}_r{data_ratio}_s{train_split}_q{int(use_quaternion)}_sl{int(use_stable_label)}_gt{grasp_type}_st{state_type}_seed{seed}'
+    exp_name = f'BC_feasible_{dataset_type}_{data_id}_h{len(hidden_dims)}_b{batch_size}_lr{learning_rate}_r{data_range}_s{train_split}_q{int(use_quaternion)}_sl{int(use_stable_label)}_seed{seed}'
     model_save_path = os.path.join(r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project',
                                    f'model/feasible_best_model/best_model_grasp_{exp_name}.pth')
     
@@ -40,7 +40,7 @@ def run_grasp_experiment(hidden_dims, num_layers, dropout_rate, batch_size,
         '--learning_rate', str(learning_rate),
         '--weight_decay', '0.01',
         '--num_epochs', '80',
-        '--early_stop_patience', '30',
+        '--early_stop_patience', '10',
         '--train_split', str(train_split),  
         '--val_split', '0.15',
         '--data_ratio', str(data_ratio),
@@ -107,13 +107,13 @@ def main():
         # }
     ]
     
-    dataset_types = ["SharedGraspNetwork_bottle_experiment_data"]
+    dataset_types = ["SharedGraspNetwork_bottle_table_experiment_data"]
     dataset_ids = [57]
     seeds = [22]
     train_splits = [0.7] 
-    data_ranges = [75000]
+    data_ranges = [70000, 28000, 14000, 2800]
     data_ratios = [0.3, 0.6, 0.9, 0.95, 0.99]
-    grasp_types = ['robot', 'table']
+    grasp_types = ['table']
     state_types = ['init']
 
     # 运行所有实验组合

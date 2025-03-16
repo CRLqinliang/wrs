@@ -2,7 +2,7 @@ import os
 import time
 from wrs import wd, rm, mcm, fsp
 
-mesh_name = "part_a"
+mesh_name = "part_b"
 mesh_path = os.path.join(os.getcwd(), "meshes", mesh_name+".stl")
 fsref_pose_path = os.path.join(os.getcwd(), "pickles", mesh_name+"_fsref_pose.pickle")
 

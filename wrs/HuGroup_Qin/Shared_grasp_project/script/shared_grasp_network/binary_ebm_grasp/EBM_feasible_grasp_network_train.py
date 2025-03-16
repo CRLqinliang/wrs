@@ -247,6 +247,177 @@ class SharedGraspEnergyDataset(Dataset):
         return self.all_features[idx], self.all_labels[idx]
 
 
+class SharedGraspTableEnergyDataset(Dataset):
+    def __init__(self, data, grasp_pickle_file, use_quaternion=False, use_stable_label=True):
+        """
+        Args:
+            data: 数据列表，每个item包含 
+                  [[obj_pos, obj_rotmat], stable_id, available_gids_table]
+            grasp_pickle_file: 抓取候选文件路径
+            use_quaternion: 是否使用四元数表示旋转。如果为False，则使用简化的(x,y,rz)表示
+            use_stable_label: 是否使用stable_label作为特征。注意：当use_quaternion=False时必须为True
+        """
+        # 参数验证
+        if not use_quaternion and not use_stable_label:
+            raise ValueError("非四元数表示(use_quaternion=False)必须使用stable_label")
+            
+        self.use_quaternion = use_quaternion
+        self.use_stable_label = use_stable_label
+        self.data = data
+        
+        # 加载抓取候选
+        with open(grasp_pickle_file, 'rb') as f:
+            grasp_candidates = pickle.load(f)
+            
+        # 预处理抓取位姿数据 - 始终使用7维表示(pos + quaternion)
+        grasp_poses = np.array([
+            np.concatenate([
+                np.array(grasp.ac_pos, dtype=np.float32).flatten(),
+                R.from_matrix(grasp.ac_rotmat).as_quat()
+            ]) for grasp in grasp_candidates
+        ], dtype=np.float32)
+        self.grasp_poses = torch.from_numpy(grasp_poses.copy())
+        del grasp_poses, grasp_candidates
+        
+        # 只有在使用stable_label时才创建编码器
+        if self.use_stable_label:
+            # 创建物体stable_id的One-Hot编码器
+            stable_types = [item[1] for item in data]  # stable_id
+            all_types = list(set(stable_types))
+            self.obj_encoder = OneHotEncoder(sparse_output=False)
+            self.obj_encoder.fit(np.array(all_types).reshape(-1, 1))
+            del stable_types, all_types
+        
+        self.prepare_data()
+    
+    def _normalize_angle(self, angle):
+        """将角度从[-π, π]归一化到[0, 1]范围"""
+        angle = (angle + np.pi) % (2 * np.pi) - np.pi
+        return (angle + np.pi) / (2 * np.pi)
+    
+    def _convert_rotation(self, rotmat):
+        """转换旋转矩阵为四元数或归一化的欧拉角"""
+        if self.use_quaternion:
+            return R.from_matrix(rotmat).as_quat()
+        else:
+            # 如果不使用四元数，只返回z轴旋转角度并归一化
+            euler = R.from_matrix(rotmat).as_euler('zxy', degrees=False)
+            return np.array([self._normalize_angle(euler[0])], dtype=np.float32)
+    
+    def _get_position(self, pos):
+        """根据表示方式返回位置信息"""
+        if self.use_quaternion:
+            return pos.copy()  # 返回完整的xyz
+        else:
+            return pos[:2].copy()  # 只返回xy
+        
+    def prepare_data(self):
+        """准备训练数据"""
+        # 计算样本数量
+        total_samples = 0
+        samples_per_item = []
+        
+        # 预计算每个数据项的样本数，并计算总样本数
+        for item in self.data:
+            grasp_indices = item[-1]  # available_gids_table
+            if grasp_indices is not None:
+                # 总样本数 = 抓取候选总数
+                sample_count = len(self.grasp_poses)
+                total_samples += sample_count
+                samples_per_item.append(sample_count)
+            else:
+                samples_per_item.append(0)
+            
+        print(f"总样本数: {total_samples}")
+        
+        # 计算特征维度
+        if self.use_quaternion:
+            pose_dim = 7  # pos(3) + quaternion(4)
+        else:
+            pose_dim = 3  # pos(2) + normalized_rz(1)
+            
+        grasp_pose_dim = 7  # 抓取位姿始终使用7维表示
+        
+        # 根据是否使用stable_label确定特征维度
+        if self.use_stable_label:
+            onehot_dim = len(self.obj_encoder.get_feature_names_out())
+            feature_dim = pose_dim + onehot_dim + grasp_pose_dim
+        else:
+            feature_dim = pose_dim + grasp_pose_dim
+        
+        print(f"特征维度: {feature_dim}")
+        
+        # 预分配数组
+        all_features = np.zeros((total_samples, feature_dim), dtype=np.float32)
+        all_labels = np.zeros(total_samples, dtype=np.float32)
+        
+        # 批量处理数据
+        current_idx = 0
+        for item_idx, item in enumerate(self.data):
+            if samples_per_item[item_idx] == 0:
+                continue
+                
+            # 获取物体位姿和稳定性ID
+            obj_pos = self._get_position(np.array(item[0][0], dtype=np.float32))
+            obj_rot = self._convert_rotation(np.array(item[0][1], dtype=np.float32))
+            stable_id = item[1]
+            
+            obj_pose = np.concatenate([obj_pos, obj_rot])
+            
+            # 获取有效抓取索引
+            grasp_indices = item[-1]
+            if grasp_indices is None:
+                grasp_indices = []
+            
+            # 为该物体状态创建所有抓取的样本
+            n_samples = len(self.grasp_poses)
+            end_idx = current_idx + n_samples
+            
+            # 填充特征数组
+            feature_start = 0
+            
+            # 添加物体位姿
+            all_features[current_idx:end_idx, feature_start:feature_start+len(obj_pose)] = obj_pose
+            feature_start += len(obj_pose)
+            
+            # 如果使用stable_label，添加One-Hot编码
+            if self.use_stable_label:
+                stable_onehot = self.obj_encoder.transform([[stable_id]]).copy()
+                all_features[current_idx:end_idx, feature_start:feature_start+len(stable_onehot[0])] = stable_onehot
+                feature_start += len(stable_onehot[0])
+                del stable_onehot
+            
+            # 添加抓取位姿
+            all_features[current_idx:end_idx, feature_start:] = self.grasp_poses.numpy()
+            
+            # 设置标签
+            # 将有效抓取的标签设为1，其余为0
+            if grasp_indices:
+                all_labels[current_idx:end_idx][grasp_indices] = 1
+            
+            # 清理临时变量
+            del obj_pos, obj_rot, obj_pose
+            current_idx = end_idx
+        
+        # 转换为tensor并确保数据独立
+        self.all_features = torch.from_numpy(all_features.copy())
+        self.all_labels = torch.from_numpy(all_labels.copy())
+        
+        # 打印数据集信息
+        positive_count = torch.sum(self.all_labels == 1).item()
+        print(f"总样本: {len(self.all_labels)}, 正样本: {positive_count}, 正样本比例: {positive_count/len(self.all_labels):.3f}")
+        
+        # 清理中间变量
+        del all_features, all_labels
+        gc.collect()
+    
+    def __len__(self):
+        return len(self.all_features)
+    
+    def __getitem__(self, idx):
+        return self.all_features[idx], self.all_labels[idx]
+
+
 class GraspEnergyNetwork(nn.Module):
     def __init__(self, input_dim, hidden_dims=None, num_layers=3, dropout_rate=0.1):
         super().__init__()
@@ -727,7 +898,7 @@ def evaluate_model(model, test_loader, device, args):
     print(f"AUC: {test_metrics['auc']:.4f}")
     
     # 分析能量分布
-    analyze_energy_distributions(test_energies, test_labels, val_threshold)
+    # analyze_energy_distributions(test_energies, test_labels, val_threshold)
     
     return test_metrics_with_val_threshold
 
@@ -763,19 +934,23 @@ def set_seed(seed=42):
         torch.cuda.manual_seed_all(seed)
     
 
-def load_raw_data(data_path, data_range=1e4):
+def load_raw_data(data_path, ratio=0.5, data_range=None):
     """加载原始数据
     Args:
         data_path: 数据文件路径
         ratio: 使用数据的比例，默认0.5表示使用后半部分数据
     """
-    if data_range is None:
-        raise error
     with open(data_path, 'rb') as f:
         raw_data = pickle.load(f)
-        raw_data = raw_data[:data_range]
-        print(f"加载数据: 数据总量 {len(raw_data)}")
-        return raw_data
+        if ratio is not None:
+            start_idx = int(len(raw_data) * ratio)
+            raw_data = raw_data[start_idx:]
+            print(f"加载数据: 总量 {len(raw_data)}, 起始点数据比例 { 1- ratio:.1%}")
+            return raw_data
+        # if data_range is not None:
+        #     raw_data = raw_data[:data_range]
+        #     print(f"加载数据: 数据总量 {len(raw_data)}")
+        #     return raw_data
 
 
 def split_data_indices(total_size, train_split, val_split):
@@ -854,8 +1029,11 @@ def create_data_loaders(train_dataset, val_dataset, test_dataset, args):
     test_loader = DataLoader(
         test_dataset,
         shuffle=False,
+        batch_size=args.batch_size * 2,
         num_workers=args.num_workers,
-        pin_memory=args.pin_memory
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2
     )
     
     return train_loader, val_loader, test_loader
@@ -923,11 +1101,11 @@ def parse_args():
     
     # 数据相关参数
     parser.add_argument('--data_path', type=str, 
-                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\grasp_random_position_bottle_robot_57.pickle')
+                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\SharedGraspNetwork_bottle_experiment_data_57.pickle')
     parser.add_argument('--grasp_data_path', type=str,
                        default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\bottle_grasp_57.pickle')
     parser.add_argument('--model_save_path', type=str,
-                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\script\shared_grasp_network\binary_ebm_grasp\output\best_model_grasp_robot_57_ebm_selu.pth')
+                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\feasible_best_model\best_model_grasp_ebm_SharedGraspNetwork_bottle_experiment_data_57_h3_b2048_lr0.001_t0.5_r0.99_s0.7_q1_sl1_grobot_table_stinit.pth')
     parser.add_argument('--train_split', type=float, default=0.7)
     parser.add_argument('--val_split', type=float, default=0.15)
     
@@ -935,6 +1113,7 @@ def parse_args():
     parser.add_argument('--num_workers', type=int, default=8)
     parser.add_argument('--pin_memory', type=bool, default=True)
     parser.add_argument('--data_range', type=int, default=1e5, help='数据采样个数')
+    parser.add_argument('--data_ratio', type=float, default=0.9, help='数据采样个数')
     
     # 模型结构参数 - 更新为简化的MLP参数
     parser.add_argument('--input_dim', type=int, default=12)
@@ -963,7 +1142,7 @@ def parse_args():
     
     # 其他参数
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--train_model', type=bool, default=True)
+    parser.add_argument('--train_model', type=bool, default=False)
     parser.add_argument('--wandb_project', type=str, default='grasp_ebm')
     parser.add_argument('--wandb_name', type=str, default='grasp_random_position_bottle_robot_57_ebm_selu')
     
@@ -971,7 +1150,7 @@ def parse_args():
     parser.add_argument('--grasp_type', type=str, default='robot_table',
                        choices=['robot_table', 'table', 'robot'],
                        help='使用哪种抓取类型(robot_table, table, robot)')
-    parser.add_argument('--state_type', type=str, default='both',
+    parser.add_argument('--state_type', type=str, default='init',
                        choices=['init', 'goal', 'both'],
                        help='处理哪种状态(init, goal, both)')
     
@@ -989,10 +1168,10 @@ def main():
     set_seed(args.seed)
     
     # 初始化wandb
-    wandb.init(project=args.wandb_project, name=args.wandb_name, config=vars(args))
+    # wandb.init(project=args.wandb_project, name=args.wandb_name, config=vars(args))
     
     # 加载原始数据
-    raw_data = load_raw_data(args.data_path, args.data_range)
+    raw_data = load_raw_data(args.data_path, args.data_ratio, args.data_range)
     indices = split_data_indices(len(raw_data), args.train_split, args.val_split)
     
     # 创建数据集
@@ -1025,11 +1204,11 @@ def main():
             early_stop_patience=args.early_stop_patience
         )
         print("开始评估模型...")
-        evaluate_model(model, val_loader, device, args)
+        evaluate_model(model, test_loader, device, args)
     else:
         # 评估模型
         print("开始评估模型...")
-        evaluate_model(model, val_loader, device, args)
+        evaluate_model(model, test_loader, device, args)
 
 
 if __name__ == '__main__':

@@ -76,17 +76,17 @@ def main():
             'temperature': 0.5,
             'use_quaternion': True,
             'use_stable_label': True,
-            'grasp_type': 'robot_table',
+            'grasp_type': 'table',
             'state_type': 'init' # 使用init保证数据量一致
         }
     ]
     
-    dataset_types = ["SharedGraspNetwork_bottle_experiment_data"]
-    dataset_ids = [57, 83, 109, 352]
+    dataset_types = ["SharedGraspNetwork_bottle_table_experiment_data"]
+    dataset_ids = [57]
     seeds = [22]
     train_splits = [0.7] 
     # data_ratio = [0.3, 0.6, 0.9, 0.95, 0.99]
-    data_range = [75000]
+    data_range = [70000, 28000, 14000, 2800]
     
     # 运行所有实验组合
     for config in experiment_configs:

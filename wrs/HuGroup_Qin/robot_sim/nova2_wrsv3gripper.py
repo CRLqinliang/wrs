@@ -21,7 +21,7 @@ class nova2_gripper_v3(ri.SglArmRobotInterface):
                                      ik_solver=ik_solver, name=name + "_manipulator", enable_cc=False)
 
         self.end_effector = wrs_gripper_v3.WRSGripper3(pos=self.manipulator.gl_flange_pos,
-                                            rotmat=self.manipulator.gl_flange_rotmat, name=name + "_eef")
+                                                rotmat=self.manipulator.gl_flange_rotmat, name=name + "_eef")
 
         # tool center point - mount the end effector to the manipulator's end.
         self.manipulator.loc_tcp_pos = self.end_effector.loc_acting_center_pos
@@ -92,7 +92,7 @@ if __name__ == '__main__':
     mgm.gen_frame().attach_to(base)
     robot = nova2_gripper_v3(enable_cc=True)
 
-    current_jnv = np.array([-0.4102, -12.9912, 112.7952, -12.1101, -90.7541, 88.9989]) * np.pi / 180
+    current_jnv = np.array([-105.7156, -5.8495, 107.7660, -14.8353, -96.9777, -3.9212]) * np.pi / 180
     robot.goto_given_conf(jnt_values=current_jnv)
     robot.gen_meshmodel(alpha=.5, toggle_tcp_frame=True, toggle_jnt_frames=False).attach_to(base)
     robot.gen_stickmodel(toggle_tcp_frame=True, toggle_jnt_frames=True).attach_to(base)

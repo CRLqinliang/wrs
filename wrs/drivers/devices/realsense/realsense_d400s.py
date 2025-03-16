@@ -7,6 +7,7 @@ Requirement libs: 'pyrealsense2', 'numpy'
 Importance: This program needs to connect to USB3 to work
 Update Notes: '0.0.1'/20220719: Implement the functions to capture the point clouds and depth camera
               '0.0.2'/20221110: 1,Implement the functions to stream multiple cameras, 2, remove multiprocessing
+              '0.0.3'/20240000: 添加深度滤波器设置
 """
 import time
 from typing import Literal
@@ -22,7 +23,7 @@ try:
 except:
     print("Cv2 aruco does not exist, some functions will stop")
 
-__VERSION__ = '0.0.2'
+__VERSION__ = '0.0.3'
 
 # Read chapter 4 of datasheet for details
 DEPTH_RESOLUTION_MID = (848, 480)
@@ -144,9 +145,22 @@ class _DataPipeline(mp.Process):
 
 
 class RealSenseD400(object):
-    def __init__(self, resolution: Literal['mid', 'high'] = 'mid', device: str = None):
+    def __init__(self, resolution: Literal['mid', 'high'] = 'mid', device: str = None, 
+                 enable_filters=True, decimation_magnitude=2, threshold_min=0.1, threshold_max=4.0,
+                 spatial_magnitude=2, spatial_smooth_alpha=0.5, spatial_smooth_delta=20,
+                 temporal_alpha=0.1, temporal_delta=20):
         """
-        :param toggle_new_process: Open a new process to stream data
+        :param resolution: 相机分辨率，'mid'或'high'
+        :param device: 设备序列号
+        :param enable_filters: 是否启用深度滤波器
+        :param decimation_magnitude: 抽取滤波器的抽取倍数
+        :param threshold_min: 阈值滤波器的最小距离（米）
+        :param threshold_max: 阈值滤波器的最大距离（米）
+        :param spatial_magnitude: 空间滤波器的平滑程度
+        :param spatial_smooth_alpha: 空间滤波器的alpha参数
+        :param spatial_smooth_delta: 空间滤波器的delta参数
+        :param temporal_alpha: 时间滤波器的alpha参数
+        :param temporal_delta: 时间滤波器的delta参数
         """
         assert resolution in ['mid', 'high']
         self._pipeline = rs.pipeline()
@@ -170,6 +184,33 @@ class RealSenseD400(object):
         # Declare pointcloud object, for calculating pointclouds and texture mappings
         self._pc = rs.pointcloud()
 
+        # 设置深度滤波器
+        self._filters = []
+        if enable_filters:
+            # 1. 抽取滤波器 - 减少点云密度
+            decimation = rs.decimation_filter()
+            decimation.set_option(rs.option.filter_magnitude, decimation_magnitude)
+            self._filters.append(decimation)
+            
+            # 2. 阈值滤波器 - 设置距离范围
+            threshold = rs.threshold_filter()
+            threshold.set_option(rs.option.min_distance, threshold_min)
+            threshold.set_option(rs.option.max_distance, threshold_max)
+            self._filters.append(threshold)
+            
+            # 3. 空间滤波器 - 平滑处理
+            spatial = rs.spatial_filter()
+            spatial.set_option(rs.option.filter_magnitude, spatial_magnitude)
+            spatial.set_option(rs.option.filter_smooth_alpha, spatial_smooth_alpha)
+            spatial.set_option(rs.option.filter_smooth_delta, spatial_smooth_delta)
+            self._filters.append(spatial)
+            
+            # 4. 时间滤波器 - 减少时间噪声
+            temporal = rs.temporal_filter()
+            temporal.set_option(rs.option.filter_smooth_alpha, temporal_alpha)
+            temporal.set_option(rs.option.filter_smooth_delta, temporal_delta)
+            self._filters.append(temporal)
+
         color_frame = self._pipeline.wait_for_frames().get_color_frame()
         self._color_intr = color_frame.profile.as_video_stream_profile().intrinsics
         self.intr_mat = np.array([[self._color_intr.fx, 0, self._color_intr.ppx],
@@ -182,7 +223,36 @@ class RealSenseD400(object):
         Require 1) point cloud, 2) point cloud color, 3) depth image and 4) color image
         :return: List[np.array, np.array, np.array, np.array]
         """
-        return stream_data(pipe=self._pipeline, pc=self._pc)
+        # 获取帧
+        frames = self._pipeline.wait_for_frames()
+        depth_frame = frames.get_depth_frame()
+        color_frame = frames.get_color_frame()
+        
+        # 应用深度滤波器
+        filtered_depth = depth_frame
+        for f in self._filters:
+            filtered_depth = f.process(filtered_depth)
+        
+        # 获取深度和彩色图像
+        depth_image = np.asanyarray(filtered_depth.get_data())
+        color_image = np.asanyarray(color_frame.get_data())
+        
+        # 计算点云和点云颜色
+        points = self._pc.calculate(filtered_depth)
+        self._pc.map_to(color_frame)
+        v, t = points.get_vertices(), points.get_texture_coordinates()
+        verts = np.asanyarray(v).view(np.float32).reshape(-1, 3)  # xyz
+        texcoords = np.asanyarray(t).view(np.float32).reshape(-1, 2)  # uv
+        
+        # 计算点云的归一化颜色
+        cw, ch = color_image.shape[:2][::-1]
+        v, u = (texcoords * (cw, ch) + 0.5).astype(np.uint32).T
+        np.clip(u, 0, ch - 1, out=u)
+        np.clip(v, 0, cw - 1, out=v)
+        pc_color = color_image[u, v] / 255
+        pc_color[:, [0, 2]] = pc_color[:, [2, 0]]
+        
+        return (verts, pc_color, depth_image, color_image)
 
     def get_pcd(self, return_color=False):
         """

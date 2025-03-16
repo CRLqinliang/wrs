@@ -5,6 +5,9 @@ The program to manually calibrate the camera
 __VERSION__ = '0.0.1'
 
 import os
+import numpy as np
+import sys
+sys.path.append("E:/Qin/wrs")
 from pathlib import Path
 import json
 from abc import ABC, abstractmethod
@@ -166,7 +169,9 @@ class ManualCalibrationBase(ABC):
         return task.again
 
     def sync_rbt(self, task):
-        self._rbt_s.goto_given_conf(self.get_rbtx_jnt_values())
+        jnt_values = self.get_rbtx_jnt_values()
+        jnt_values = np.array(jnt_values) * np.pi / 180
+        self._rbt_s.goto_given_conf(jnt_values)
         self.plot()
         return task.again
 
@@ -238,7 +243,7 @@ class ManualCalibrationBase(ABC):
 
 if __name__ == "__main__":
 
-    class XArmLite6ManualCalib(ManualCalibrationBase):
+    class Nova2WRSV3GripperManualCalib(ManualCalibrationBase):
         """
         Eye in hand example
         """
@@ -248,26 +253,54 @@ if __name__ == "__main__":
             return rm.np.hstack((pcd, pcd_color))
 
         def get_rbtx_jnt_values(self):
-            return self._rbt_x.get_jnt_values()
+            return_str = self._rbt_x.GetAngle()
+            # 解析格式为 "ErrorID,{J1,J2,J3,J4,J5,J6},GetAngle();" 的字符串
+            bracket_content = return_str.split('{')[1].split('}')[0]
+            # 分割并转换为浮点数
+            jnt_values = [float(i) for i in bracket_content.split(',')]
+            return jnt_values
 
         def align_pcd(self, pcd):
             r2cam_mat = self._init_calib_mat
-            rbt_pose = self._rbt_x.get_pose()
-            w2r_mat = rm.homomat_from_posrot(*rbt_pose)
+            rbt_pose_str = self._rbt_x.GetPose()
+            # 解析格式为 "ErrorID,{X,Y,Z,A,B,C},GetPose();" 的字符串
+            bracket_content = rbt_pose_str.split('{')[1].split('}')[0]
+            # 分割并转换为浮点数
+            rbt_pose = [float(i) for i in bracket_content.split(',')]
+            pos = rbt_pose[:3]
+            rotmat = rm.rotmat_from_euler(rbt_pose[3], rbt_pose[4], rbt_pose[5])
+            w2r_mat = rm.homomat_from_posrot(pos, rotmat)
             w2c_mat = w2r_mat.dot(r2cam_mat)
             return rm.transform_points_by_homomat(w2c_mat, points=pcd)
 
+    import time
     import wrs.visualization.panda.world as wd
-    from wrs.drivers.devices.realsense.realsense_d400s import RealSenseD400
+    from wrs.drivers.devices.realsense.realsense_d400s import RealSenseD400, find_devices
     from wrs.robot_sim.robots.xarmlite6_wg import x6wg2
+    from wrs.HuGroup_Qin.driver.robot_driver.dobot_api import DobotApiDashboard
+    from wrs.HuGroup_Qin.robot_sim.nova2_wrsv3gripper import nova2_gripper_v3
 
     base = wd.World(cam_pos=rm.vec(2, 0, 1.5), lookat_pos=rm.vec(0, 0, 0))
-    rs_pipe = RealSenseD400()
+        # 查找并初始化RealSense相机
+    serials, _ = find_devices()
+    if not serials:
+        print("未找到RealSense相机!")
     # the first frame contains no data information
-    rs_pipe.get_pcd_texture_depth()
-    rs_pipe.get_pcd_texture_depth()
+    rs_camera = RealSenseD400(device=serials[0])
+    a = rs_camera.get_pcd_texture_depth()
+    # rs_pipe.get_pcd_texture_depth()
     # rbtx = XArmLite6X(ip='192.168.1.190', has_gripper=False)
-    rbt = x6wg2.XArmLite6WG2()
+    # bt = x6wg2.XArmLite6WG2()
 
-    xarm_mc = XArmLite6ManualCalib(rbt_s=rbt, rbt_x=None, sensor_hdl=rs_pipe)
+    rbt = nova2_gripper_v3()
+    robot_x = DobotApiDashboard("192.168.5.100", 29999)
+    robot_x.EnableRobot(load=1.0, centerX=0.0, centerY=0.0, centerZ=0.0)
+    robot_x.StartDrag()
+    time.sleep(1)
+    print("start collecting eye2hand calibration data...")
+
+    xarm_mc = Nova2WRSV3GripperManualCalib(rbt_s=rbt, rbt_x=robot_x, sensor_hdl=rs_camera)
     base.run()
+    robot_x.StopDrag()
+    robot_x.DisableRobot()
+

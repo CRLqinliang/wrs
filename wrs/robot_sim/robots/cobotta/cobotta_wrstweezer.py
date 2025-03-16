@@ -64,8 +64,7 @@ class CobottaTweezer(sari.SglArmRobotInterface):
         self.update_end_effector(wide)
 
     def fk(self, jnt_values, gripper_wide=None, toggle_jacobian=False, update=True):
-        gl_flange_pos, gl_flange_rotmat = self._manipulator.fk(jnt_values=jnt_values, toggle_jacobian=toggle_jacobian,
-                                                               update=update)
+        gl_flange_pos, gl_flange_rotmat = self._manipulator.fk(jnt_values=jnt_values, toggle_jacobian=toggle_jacobian, update=update)
         gl_tcp_pos = gl_flange_pos
         gl_tcp_rotmat = gl_flange_rotmat
         self.update_end_effector(gripper_wide)
@@ -141,8 +140,9 @@ if __name__ == '__main__':
     mcm.mgm.gen_frame().attach_to(base)
     robot = CobottaTweezer(enable_cc=True)
 
-    tgt_pos = np.array([.12, -.1, .1])
+    tgt_pos = np.array([.22, -.15, .1])
     tgt_rotmat = rm.rotmat_from_axangle([5, 1, 3], math.pi)
+    mcm.mgm.gen_frame(tgt_pos, tgt_rotmat, ax_length=0.03).attach_to(base)
     jnt_values = robot.ik(tgt_pos, tgt_rotmat)
     if jnt_values is not None:
         robot.goto_given_conf(jnt_values=jnt_values)
@@ -151,6 +151,10 @@ if __name__ == '__main__':
         robot_meshmodel.attach_to(base)
     base.run()
 
+    jnv_value = np.array([-1.22, -6.78, 93.4, 97.4, -59.06, -41.21]) * np.pi / 180
+    robot.goto_given_conf(jnv_value)
+    robot.gen_meshmodel(toggle_tcp_frame=True, toggle_jnt_frames=True).attach_to(base)
+    base.run()
     # current_jnt_values = robot_s.ik(tgt_pos, tgt_rotmat)
     # robot_s.fix_to(tgt_pos, tgt_rotmat)
     # current_jnt_values =np.array([ 1.68747252,  0.97073813,  2.2426744 ,  0.11973604, -1.63202317,

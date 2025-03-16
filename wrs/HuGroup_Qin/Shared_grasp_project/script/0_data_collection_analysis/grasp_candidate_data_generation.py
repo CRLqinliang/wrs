@@ -202,19 +202,19 @@ if __name__ == '__main__':
     try:
         # 世界配置
         base = wd.World(cam_pos=[1.7, 1.7, 1.7], lookat_pos=[0, 0, .3])
-        mgm.gen_frame().attach_to(base)
+        # mgm.gen_frame().attach_to(base)
 
         # 对象配置
         # obj_path = r"H:\Qin\wrs\wrs\bench_mark\ycb\power_drill.stl"  # 使用相对路径
-        # obj_path = r"H:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\bottle_round.stl"
-        obj_path = r"H:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\mug.stl"
+        obj_path = r"E:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\bottle.stl"
+        # obj_path = r"H:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\mug.stl"
         # obj_path = r"H:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\bracketR1.stl"
         # table_path = r"H:\Qin\wrs\wrs\HuGroup_Qin\robot_sim\meshes\regrasp_table_env.stl"
         # obj_path = r"H:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\tubebig.stl"
         
-        obj_cmodel = mcm.CollisionModel(initor=obj_path)
+        obj_cmodel = mcm.CollisionModel(initor=obj_path, rgb=rm.const.white)
         obj_cmodel.attach_to(base)
-
+        # base.run()
         if obj_cmodel is None:
             raise ValueError("无法加载物体模型")
 
@@ -230,8 +230,8 @@ if __name__ == '__main__':
             gripper,
             obj_cmodel,
             angle_between_contact_normals=rm.np.radians(160),
-            rotation_interval=rm.np.radians(45),
-            max_samples=100
+            rotation_interval=rm.np.radians(180),
+            max_samples=20
         )
         
         # 显示抓取集合
@@ -240,11 +240,14 @@ if __name__ == '__main__':
         # grasp_collection_set.save_to_disk(r"H:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle_round\bottle_ground_grasp_{}.pickle".format(len(grasp_collection_set)))
         # grasp_collection_set.save_to_disk(r"H:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Power_drill\power_drill_grasp_{}.pickle".format(len(grasp_collection_set)))
         # grasp_collection_set.save_to_disk(r"H:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\tube_big\tube_big_grasp_{}.pickle".format(len(grasp_collection_set)))
-        for grasp in grasp_collection_set:
-            gripper.grip_at_by_pose(jaw_center_pos=grasp.ac_pos,
-                                    jaw_center_rotmat=grasp.ac_rotmat,
-                                    jaw_width=grasp.ee_values)
-            gripper.gen_meshmodel(alpha=.2).attach_to(base)
+        grasp_collection_set = grasp_load(r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\bottle_grasp_57.pickle")
+
+        # for grasp in grasp_collection_set:
+        grasp = grasp_collection_set.__getitem__(0)
+        gripper.grip_at_by_pose(jaw_center_pos=grasp.ac_pos,
+                                jaw_center_rotmat=grasp.ac_rotmat,
+                                jaw_width=grasp.ee_values)
+        gripper.gen_meshmodel(alpha=1).attach_to(base)
         base.run()
         
     except Exception as e:

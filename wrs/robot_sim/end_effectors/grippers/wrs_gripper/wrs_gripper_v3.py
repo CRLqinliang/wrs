@@ -30,7 +30,10 @@ class WRSGripper3(gpi.GripperInterface):
         # anchor
         self.jlc.anchor.lnk_list[0].cmodel = mcm.CollisionModel(os.path.join(current_file_dir, "meshes", "base_v3.stl"),
                                                                 name="wg_v3_base",
-                                                                cdmesh_type=self.cdmesh_type)
+                                                                cdmesh_type=self.cdmesh_type,
+                                                                cdprim_type=mcm.const.CDPrimType.USER_DEFINED,
+                                                                userdef_cdprim_fn=self._base_cdprim, ex_radius=.005)
+
         self.jlc.anchor.lnk_list[0].cmodel.rgba = rm.const.tab20_list[14]
         # the 1st joint (left finger, +y direction)
         self.jlc.jnts[0].change_type(rkjlc.const.JntType.PRISMATIC, motion_range=np.array([0, self.jaw_range[1] / 2]))
@@ -75,6 +78,17 @@ class WRSGripper3(gpi.GripperInterface):
         cdprim = NodePath(name + "_cdprim")
         cdprim.attachNewNode(pdcnd)
         return cdprim
+
+    @staticmethod
+    def _base_cdprim(name="auto", ex_radius=None):
+        pdcnd = CollisionNode(name + "_cnode")
+        collision_primitive_c0 = CollisionBox(Point3(0,0, -.0275),
+                                              x=.049 + ex_radius, y=0.049 + ex_radius, z=.1225 + ex_radius)
+        pdcnd.addSolid(collision_primitive_c0)
+        cdprim = NodePath(name + "_cdprim")
+        cdprim.attachNewNode(pdcnd)
+        return cdprim
+
 
     def fix_to(self, pos, rotmat, jaw_width=None):
         self._pos = pos
@@ -134,6 +148,6 @@ if __name__ == '__main__':
     mgm.gen_frame().attach_to(base)
     gripper = WRSGripper3()
     gripper.change_jaw_width(.104)
-    gripper.gen_meshmodel(toggle_tcp_frame=True, toggle_cdprim=True).attach_to(base)
-    # grippers.show_cdprimit()
+    gripper.gen_meshmodel(toggle_tcp_frame=True, toggle_cdprim=True, toggle_cdmesh=False).attach_to(base)
+
     base.run()

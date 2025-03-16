@@ -57,6 +57,7 @@ class nova2_gripper_v3_without_table(ri.SglArmRobotInterface):
         if self.cc is not None:
             self.setup_cc()
 
+
     @staticmethod
     def _base_cdprim(name=None, ex_radius=None):
         pdcnd = CollisionNode('regrasp_nova2_base')
@@ -71,9 +72,7 @@ class nova2_gripper_v3_without_table(ri.SglArmRobotInterface):
         ee_cces = []
         for id, cdlnk in enumerate(self.end_effector.cdelements):
             ee_cces.append(self.cc.add_cce(cdlnk))
-        # base
-        bd = self.cc.add_cce(self.body.lnk_list[0])
-        
+
         # manipulator
         mlb = self.cc.add_cce(self.manipulator.jlc.anchor.lnk_list[0])
         ml0 = self.cc.add_cce(self.manipulator.jlc.jnts[0].lnk)
@@ -83,13 +82,12 @@ class nova2_gripper_v3_without_table(ri.SglArmRobotInterface):
         ml4 = self.cc.add_cce(self.manipulator.jlc.jnts[4].lnk)
         ml5 = self.cc.add_cce(self.manipulator.jlc.jnts[5].lnk)
         from_list =  ee_cces + [ml4, ml5]
-        into_list = [mlb, ml0, ml1] #bd
+        into_list = [mlb, ml0, ml1]
         self.cc.set_cdpair_by_ids(from_list, into_list)
-        # self.cc.set_cdpair_by_ids([ml1, ml2, ml3], [bd])
         self.cc.enable_extcd_by_id_list(id_list=[ml0, ml1, ml2, ml3, ml4, ml5], type="from")
-        self.cc.enable_innercd_by_id_list(id_list=[bd, mlb, ml1, ml2, ml3, ml4], type="into")
+        self.cc.enable_innercd_by_id_list(id_list=[mlb, ml0, ml1, ml2, ml3, ml4], type="into")
         self.cc.dynamic_ext_list = ee_cces
-        # self.cc.dynamic_into_list = [bd]
+
 
     def fix_to(self, pos, rotmat):
         self.pos = pos
@@ -120,9 +118,6 @@ class nova2_gripper_v3_without_table(ri.SglArmRobotInterface):
                       name='nova2_regrasp_exp'):
 
         m_col = mmc.ModelCollection(name=self.name+'_meshmodel')
-        # self.body.gen_meshmodel(rgb=rgb, alpha=alpha, toggle_flange_frame=toggle_flange_frame,
-        #                         toggle_root_frame=toggle_jnt_frames, toggle_cdprim=toggle_cdprim,
-        #                         toggle_cdmesh=toggle_cdmesh, name=name + "_body").attach_to(m_col)
 
         if self._manipulator is not None:
             self._manipulator.gen_meshmodel(rgb=rgb,
@@ -185,43 +180,51 @@ if __name__ == '__main__':
     mgm.gen_frame().attach_to(base)
     robot = nova2_gripper_v3_without_table(enable_cc=True)
 
-    # robot configuration
-    current_jnv = np.array([-113.4576, 13.06, 127.8234, -98.2558, -100.2281, -168.2637]) * np.pi / 180
-    target_pos, target_rotmat = robot.fk(current_jnv)
-    print(target_pos)
-    robot.goto_given_conf(jnt_values=current_jnv)
-    robot.gen_meshmodel(alpha=1, toggle_tcp_frame=True, toggle_jnt_frames=False).attach_to(base)
-    # robot.show_cdprim()
+    # robot configuration [0.11929658 0.19255743 0.02712538]
+    # [[ 0.67696922  0.28883446 -0.67696922]
+    #  [ 0.2042368  -0.95737906 -0.2042368 ]
+    #  [-0.70710678  0.         -0.70710678]]
+       # current_jnv = np.array([-113.4576, 13.06, 127.8234, -98.2558, -100.2281, -168.2637]) * np.pi / 180
+       #  target_pos, target_rotmat = robot.fk(current_jnv)
+       #  print(target_pos)
+       #  robot.goto_given_conf(jnt_values=current_jnv)
+       #  robot.gen_meshmodel(alpha=1, toggle_tcp_frame=True, toggle_jnt_frames=False).attach_to(base)
+       #  robot.show_cdprim()
+       #  base.run()
 
-    # 显示两个marker的坐标系
-    tcp_pos, tcp_rotmat = robot.fk(current_jnv)
-    tcp_homomat = rm.homomat_from_posrot(tcp_pos, tcp_rotmat)
-    
-    # 显示marker 0的坐标系
-    marker0_homomat = tcp_homomat @ T_ee_marker[0]
-    marker0_pos = marker0_homomat[:3, 3]
-    marker0_rotmat = marker0_homomat[:3, :3]
-    mgm.gen_frame(pos=marker0_pos, rotmat=marker0_rotmat, ax_length=0.05 ,alpha=0.7).attach_to(base)
+    # # 显示两个marker的坐标系
+    # tcp_pos, tcp_rotmat = robot.fk(current_jnv)
+    # tcp_homomat = rm.homomat_from_posrot(tcp_pos, tcp_rotmat)
+    #
+    # # 显示marker 0的坐标系
+    # marker0_homomat = tcp_homomat @ T_ee_marker[0]
+    # marker0_pos = marker0_homomat[:3, 3]
+    # marker0_rotmat = marker0_homomat[:3, :3]
+    # mgm.gen_frame(pos=marker0_pos, rotmat=marker0_rotmat, ax_length=0.05 ,alpha=0.7).attach_to(base)
+    #
+    # # 显示marker 4的坐标系
+    # marker1_homomat = tcp_homomat @ T_ee_marker[4]
+    # marker1_pos = marker1_homomat[:3, 3]
+    # marker1_rotmat = marker1_homomat[:3, :3]
+    # mgm.gen_frame(pos=marker1_pos, rotmat=marker1_rotmat, ax_length=0.05, alpha=0.7).attach_to(base)
+    #
+    # # 显示基座marker的坐标系
+    # marker2_homomat = T_base_marker[0]
+    # marker2_pos = marker2_homomat[:3, 3]
+    # marker2_rotmat = marker2_homomat[:3, :3]
+    # mgm.gen_frame(pos=marker2_pos, rotmat=marker2_rotmat, ax_length=0.05, alpha=0.7).attach_to(base)
 
-    # 显示marker 4的坐标系
-    marker1_homomat = tcp_homomat @ T_ee_marker[4]
-    marker1_pos = marker1_homomat[:3, 3]
-    marker1_rotmat = marker1_homomat[:3, :3]
-    mgm.gen_frame(pos=marker1_pos, rotmat=marker1_rotmat, ax_length=0.05, alpha=0.7).attach_to(base)
-
-    # 显示基座marker的坐标系
-    marker2_homomat = T_base_marker[0]
-    marker2_pos = marker2_homomat[:3, 3]
-    marker2_rotmat = marker2_homomat[:3, :3]
-    mgm.gen_frame(pos=marker2_pos, rotmat=marker2_rotmat, ax_length=0.05, alpha=0.7).attach_to(base)
-
-    # ik_jnvs = robot.ik(target_pos, target_rotmat, option='multiple')
-    # print(ik_jnvs * 180/np.pi)
-    # for ik_jnv in ik_jnvs:
-    #     robot.goto_given_conf(ik_jnv)
-    #     robot.gen_meshmodel(alpha=0.3, toggle_tcp_frame=True, toggle_jnt_frames=False).attach_to(base)
-
-    # robot.show_cdprim()
+    target_pos = [0.11929658 ,0.19255743 ,0.02712538]
+    target_rotmat = np.array([[0.67696922, 0.28883446, -0.67696922],
+                              [0.2042368, -0.95737906, -0.2042368],
+                              [-0.70710678, 0., -0.70710678]])
+    ik_jnvs = robot.ik(target_pos, target_rotmat, option='multiple')
+    print(ik_jnvs * 180/np.pi)
+    for ik_jnv in ik_jnvs:
+        robot.goto_given_conf(ik_jnv)
+        if not robot.is_collided():
+            robot.gen_meshmodel(alpha=0.8, toggle_tcp_frame=True, toggle_jnt_frames=False).attach_to(base)
+            robot.show_cdprim()
     # robot.unshow_cdprim()
 
     base.run()

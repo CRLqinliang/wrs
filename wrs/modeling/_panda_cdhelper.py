@@ -370,7 +370,7 @@ def is_collided(cmodel_list0, cmodel_list1, toggle_contacts=False):
         if toggle_contacts:
             contact_points = np.asarray([da.pdvec3_to_npvec3(cd_entry.getSurfacePoint(base.render)) for cd_entry in
                                          cd_handler.getEntries()])
-            print(contact_points)
+            # print(contact_points)
             return True, contact_points
         else:
             return True

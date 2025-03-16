@@ -8,6 +8,7 @@ import math
 import os
 import numpy as np
 import sys
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.abspath(os.path.join(current_dir, "../../.."))
 sys.path.append(root_dir)
@@ -61,7 +62,7 @@ class nova2_gripper_v3(ri.SglArmRobotInterface):
     def _base_cdprim(name=None, ex_radius=None):
         pdcnd = CollisionNode('regrasp_nova2_base')
         pdcnd.addSolid(CollisionBox(Point3(0, 0.5, -.22), 1, 1, .22))
-        pdcnd.addSolid(CollisionBox(Point3(-.29, 0, 0), 0.01, 1, 2))
+        pdcnd.addSolid(CollisionBox(Point3(-.54 - 0.25, 0.5, 0), 0.5, 1, 1))
         cdprim = NodePath("user_defined")
         cdprim.attachNewNode(pdcnd)
         return cdprim
@@ -142,10 +143,13 @@ class nova2_gripper_v3(ri.SglArmRobotInterface):
         return m_col
 
 def obj_setup(name, pos, rotmat, rgb=None, alpha=None):
+    # we only consider SE(2) DOF for the object
     obj_cmodel = mcm.CollisionModel(name=name, rgb=rgb, alpha=alpha,
-                                    initor=r"H:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\bottle.stl")
+                initor=r"E:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\bottle.stl")
     obj_cmodel.pos = pos
     obj_cmodel.rotmat = rotmat
+    obj_cmodel.show_local_frame()
+    obj_cmodel.attach_to(base)
     return obj_cmodel
 
 if __name__ == '__main__':
@@ -184,36 +188,31 @@ if __name__ == '__main__':
     base = wd.World(cam_pos=[1.7, 1.7, 1.7], lookat_pos=[0, 0, .3])
     mgm.gen_frame().attach_to(base)
     robot = nova2_gripper_v3(enable_cc=True)
-
-    # robot configuration
-    current_jnv = np.array([-113.4576, 13.06, 127.8234, -98.2558, -100.2281, -168.2637]) * np.pi / 180
-    target_pos, target_rotmat = robot.fk(current_jnv)
-    print(target_pos)
-    robot.goto_given_conf(jnt_values=current_jnv)
     robot.gen_meshmodel(alpha=1, toggle_tcp_frame=True, toggle_jnt_frames=False).attach_to(base)
     robot.show_cdprim()
+    base.run()
 
-    # 显示两个marker的坐标系
-    tcp_pos, tcp_rotmat = robot.fk(current_jnv)
-    tcp_homomat = rm.homomat_from_posrot(tcp_pos, tcp_rotmat)
-    
-    # 显示marker 0的坐标系
-    marker0_homomat = tcp_homomat @ T_ee_marker[0]
-    marker0_pos = marker0_homomat[:3, 3]
-    marker0_rotmat = marker0_homomat[:3, :3]
-    mgm.gen_frame(pos=marker0_pos, rotmat=marker0_rotmat, ax_length=0.05 ,alpha=0.7).attach_to(base)
-
-    # 显示marker 4的坐标系
-    marker1_homomat = tcp_homomat @ T_ee_marker[4]
-    marker1_pos = marker1_homomat[:3, 3]
-    marker1_rotmat = marker1_homomat[:3, :3]
-    mgm.gen_frame(pos=marker1_pos, rotmat=marker1_rotmat, ax_length=0.05, alpha=0.7).attach_to(base)
-
-    # 显示基座marker的坐标系
-    marker2_homomat = T_base_marker[0]
-    marker2_pos = marker2_homomat[:3, 3]
-    marker2_rotmat = marker2_homomat[:3, :3]
-    mgm.gen_frame(pos=marker2_pos, rotmat=marker2_rotmat, ax_length=0.05, alpha=0.7).attach_to(base)
+    # # 显示两个marker的坐标系
+    # tcp_pos, tcp_rotmat = robot.fk(current_jnv)
+    # tcp_homomat = rm.homomat_from_posrot(tcp_pos, tcp_rotmat)
+    #
+    # # 显示marker 0的坐标系
+    # marker0_homomat = tcp_homomat @ T_ee_marker[0]
+    # marker0_pos = marker0_homomat[:3, 3]
+    # marker0_rotmat = marker0_homomat[:3, :3]
+    # mgm.gen_frame(pos=marker0_pos, rotmat=marker0_rotmat, ax_length=0.05 ,alpha=0.7).attach_to(base)
+    #
+    # # 显示marker 4的坐标系
+    # marker1_homomat = tcp_homomat @ T_ee_marker[4]
+    # marker1_pos = marker1_homomat[:3, 3]
+    # marker1_rotmat = marker1_homomat[:3, :3]
+    # mgm.gen_frame(pos=marker1_pos, rotmat=marker1_rotmat, ax_length=0.05, alpha=0.7).attach_to(base)
+    #
+    # # 显示基座marker的坐标系
+    # marker2_homomat = T_base_marker[0]
+    # marker2_pos = marker2_homomat[:3, 3]
+    # marker2_rotmat = marker2_homomat[:3, :3]
+    # mgm.gen_frame(pos=marker2_pos, rotmat=marker2_rotmat, ax_length=0.05, alpha=0.7).attach_to(base)
 
     # ik_jnvs = robot.ik(target_pos, target_rotmat, option='multiple')
     # print(ik_jnvs * 180/np.pi)
@@ -221,7 +220,20 @@ if __name__ == '__main__':
     #     robot.goto_given_conf(ik_jnv)
     #     robot.gen_meshmodel(alpha=0.3, toggle_tcp_frame=True, toggle_jnt_frames=False).attach_to(base)
 
-    # robot.show_cdprim()
+    target_pos = [0.11929658 ,0.19255743 ,0.02712538]
+    target_rotmat = np.array([[0.67696922, 0.28883446, -0.67696922],
+                              [0.2042368, -0.95737906, -0.2042368],
+                              [-0.70710678, 0., -0.70710678]])
+    ik_jnvs = robot.ik(target_pos, target_rotmat, option='multiple')
+    print(ik_jnvs * 180/np.pi)
+    for ik_jnv in ik_jnvs:
+        robot.goto_given_conf(ik_jnv)
+        robot.gen_meshmodel(alpha=0.3, toggle_tcp_frame=True, toggle_jnt_frames=False).attach_to(base)
+        robot.show_cdprim()
+        if not robot.is_collided(toggle_dbg=True):
+            robot.gen_meshmodel(alpha=0.3, toggle_tcp_frame=True, toggle_jnt_frames=False).attach_to(base)
+
     # robot.unshow_cdprim()
+
 
     base.run()

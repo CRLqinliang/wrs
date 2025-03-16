@@ -445,13 +445,13 @@ def demo():
     space_pressed = False  # 添加按键状态标志
     
     # 加载模型和抓取数据
-    model = GraspEnergyNetwork(
-                        input_dim=31,
-                        hidden_dims=[256, 512, 256],
-                        num_res_blocks=2,
-                        dropout_rate=0.2)
-    checkpoint = torch.load(r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\Binary_ebm_model\best_model_grasp_ebm_robot_table_withstablelabel_5M_109_h3_2048_lr0.0002_t0.1_dataratio_0.5_trainsplit_0.7.pth")
-    model.load_state_dict(checkpoint['model_state_dict'])
+    # model = GraspEnergyNetwork(
+    #                     input_dim=31,
+    #                     hidden_dims=[256, 512, 256],
+    #                     num_res_blocks=2,
+    #                     dropout_rate=0.2)
+    # checkpoint = torch.load(r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\Binary_ebm_model\best_model_grasp_ebm_robot_table_withstablelabel_5M_109_h3_2048_lr0.0002_t0.1_dataratio_0.5_trainsplit_0.7.pth")
+    # model.load_state_dict(checkpoint['model_state_dict'])
     grasp_collection = gg.GraspCollection.load_from_disk(file_name=r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\bottle_grasp_109.pickle")
     grasp_poses = np.array([np.concatenate([ np.array(grasp.ac_pos, dtype=np.float32).flatten(), rm.rotmat_to_quaternion(grasp.ac_rotmat)]) for grasp in grasp_collection], dtype=np.float32)
 
@@ -465,7 +465,7 @@ def demo():
         # 如果检测到AR码
         if ids is not None:
             # 绘制检测到的标记
-            cv2.aruco.drawDetectedMarkers(color_img, corners, ids)
+            # cv2.aruco.drawDetectedMarkers(color_img, corners, ids)
             
             # 存储每个检测到的marker的位姿
             marker_poses_camera = {}
@@ -485,9 +485,9 @@ def demo():
                 
                 marker_poses_camera[marker_id] = marker_pose
                 
-                cv2.drawFrameAxes(color_img, rs_camera.intr_mat, 
-                                rs_camera.intr_distcoeffs, 
-                                rvec, tvec, 0.02)
+                # cv2.drawFrameAxes(color_img, rs_camera.intr_mat,
+                #                 rs_camera.intr_distcoeffs,
+                #                 rvec, tvec, 0.02)
             
             # 估计物体位姿
             object_pose_camera = estimate_object_pose_from_markers(marker_poses_camera)

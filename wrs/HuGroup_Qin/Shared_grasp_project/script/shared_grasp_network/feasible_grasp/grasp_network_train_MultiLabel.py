@@ -502,7 +502,7 @@ def evaluate_model(model, test_loader, device, args):
     model.load_state_dict(checkpoint['model_state_dict'])
     val_threshold = checkpoint['optimal_threshold']  # 获取验证集确定的最佳阈值
     
-    print(f"加载模型 - 最佳Micro F1: {checkpoint['best_val_metric']:.4f}, Epoch: {checkpoint['epoch']}")
+    print(f"加载模型 - 最佳F1: {checkpoint['best_val_metric']:.4f}, Epoch: {checkpoint['epoch']}")
     print(f"使用验证集确定的最佳阈值: {val_threshold:.4f}")
     
     model = model.to(device)
@@ -522,18 +522,26 @@ def evaluate_model(model, test_loader, device, args):
     test_labels = np.array(test_labels)
     
     # 使用验证集阈值评估测试集
-    test_metrics = calculate_metrics(test_outputs, test_labels)
+    test_metrics_val_threshold = calculate_metrics_with_fixed_threshold(test_outputs, test_labels, val_threshold)
     
-    print("\n=== 测试集评估结果 ===")
-    print(f"Accuracy: {test_metrics['accuracy']:.4f}")
-    print(f"Macro Precision: {test_metrics['macro_precision']:.4f}")
-    print(f"Macro Recall: {test_metrics['macro_recall']:.4f}")
-    print(f"Macro F1 Score: {test_metrics['macro_f1']:.4f}")
-    print(f"Micro Precision: {test_metrics['micro_precision']:.4f}")
-    print(f"Micro Recall: {test_metrics['micro_recall']:.4f}")
-    print(f"Micro F1 Score: {test_metrics['micro_f1']:.4f}")
+    # 同时计算测试集上的最佳阈值和指标（仅供参考）
+    test_metrics_best = calculate_metrics(test_outputs, test_labels)
     
-    return test_metrics
+    print("\n=== 测试集评估结果（使用验证集阈值） ===")
+    print(f"阈值: {val_threshold:.4f}")
+    print(f"Macro Precision: {test_metrics_val_threshold['macro_precision']:.4f}")
+    print(f"Macro Recall: {test_metrics_val_threshold['macro_recall']:.4f}")
+    print(f"Macro F1 Score: {test_metrics_val_threshold['macro_f1']:.4f}")
+    
+    print("\n=== 测试集上的最佳阈值结果（仅供参考） ===")
+    print(f"最佳阈值: {test_metrics_best['optimal_threshold']:.4f}")
+    print(f"Accuracy: {test_metrics_best['accuracy']:.4f}")
+    print(f"Macro Precision: {test_metrics_best['macro_precision']:.4f}")
+    print(f"Macro Recall: {test_metrics_best['macro_recall']:.4f}")
+    print(f"Macro F1 Score: {test_metrics_best['macro_f1']:.4f}")
+
+    # 返回使用验证集阈值的指标
+    return test_metrics_val_threshold
 
 
 def load_raw_data(data_path, ratio=0.5):
@@ -700,17 +708,17 @@ def parse_args():
     
     # 数据相关参数
     parser.add_argument('--data_path', type=str, 
-                      default=r'H:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\grasp_random_position_bottle_robot_table_57.pickle',
+                      default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\SharedGraspNetwork_bottle_experiment_data_57.pickle',
                       help='训练数据路径')
     parser.add_argument('--grasp_data_path', type=str,
-                      default=r'H:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\bottle_grasp_57.pickle',
+                      default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\bottle_grasp_57.pickle',
                       help='抓取候选数据路径')
     parser.add_argument('--model_save_path', type=str,
-                      default=r'H:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\feasible_best_model\feasible_grasp_robot_table_bottle_57.pth',
+                      default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\feasible_best_model\best_model_grasp_MultiLabel_SharedGraspNetwork_bottle_experiment_data_57_h3_b2048_lr0.001_r0_s0.7_q0_sl1_seed42.pth',
                       help='模型保存路径')
     parser.add_argument('--train_split', type=float, default=0.7, help='训练集比例')
     parser.add_argument('--val_split', type=float, default=0.15, help='验证集比例')
-    parser.add_argument('--data_ratio', type=float, default=1.0, help='数据采样比例')
+    parser.add_argument('--data_ratio', type=float, default=0.95, help='数据采样比例')
     
     # 数据加载参数
     parser.add_argument('--num_workers', type=int, default=4, help='数据加载线程数')
@@ -718,11 +726,11 @@ def parse_args():
     parser.add_argument('--use_balanced_sampler', type=bool, default=True, help='是否使用平衡采样器')
     
     # 模型结构参数
-    parser.add_argument('--hidden_dims', nargs='+', type=int, default=[256, 256, 256],
+    parser.add_argument('--hidden_dims', nargs='+', type=int, default=[512, 512, 512],
                        help='隐藏层维度')
     parser.add_argument('--num_layers', type=int, default=3, help='网络层数')
     parser.add_argument('--dropout_rate', type=float, default=0.1, help='Dropout比率')
-    parser.add_argument('--use_quaternion', type=int, default=1,
+    parser.add_argument('--use_quaternion', type=int, default=0,
                        help='使用四元数表示 (1) 或简化表示 (0)')
     parser.add_argument('--use_stable_label', type=int, default=1,
                        help='使用稳定性标签 (1) 或不使用 (0)')
@@ -741,16 +749,16 @@ def parse_args():
     
     # 其他参数
     parser.add_argument('--seed', type=int, default=42, help='随机种子')
-    parser.add_argument('--train_model', type=bool, default=True, help='是否训练模型')
+    parser.add_argument('--train_model', type=bool, default=False, help='是否训练模型')
     
     # wandb相关参数
-    parser.add_argument('--wandb_project', type=str, default='regrasp', help='wandb项目名称')
+    parser.add_argument('--wandb_project', type=str, default='multi_label_feasible_grasp_experiments', help='wandb项目名称')
     parser.add_argument('--wandb_name', type=str, 
-                      default='grasp_feasibility_classification',
+                      default='evaluate_model',
                       help='wandb运行名称')
     
     # 添加data_id参数（如果命令行中未指定，将从文件路径中提取）
-    parser.add_argument('--data_id', type=int, default=None, help='数据ID，也用作输出类别数')
+    parser.add_argument('--data_id', type=int, default=57, help='数据ID，也用作输出类别数')
     
     args = parser.parse_args()
     # 将整数转换为布尔值
@@ -776,14 +784,14 @@ def main():
     set_seed(args.seed)
     
     # 初始化wandb
-    try:
-        wandb.init(
-            project=args.wandb_project,
-            name=args.wandb_name,
-            config=vars(args)
-        )
-    except Exception as e:
-        print(f"Failed to initialize Weights and Biases: {e}")
+    # try:
+    #     wandb.init(
+    #         project=args.wandb_project,
+    #         name=args.wandb_name,
+    #         config=vars(args)
+    #     )
+    # except Exception as e:
+    #     print(f"Failed to initialize Weights and Biases: {e}")
     
     # 加载原始数据
     raw_data = load_raw_data(args.data_path, args.data_ratio)

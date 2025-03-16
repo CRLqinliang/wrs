@@ -1,5 +1,6 @@
 import os
 from panda3d.core import CollisionNode, CollisionBox, Point3, NodePath
+import numpy as np
 import wrs.basis.robot_math as rm
 import wrs.modeling.collision_model as mcm
 import wrs.modeling.model_collection as mmc
@@ -20,6 +21,9 @@ class WRSTweezer(gpi.GripperInterface):
         current_file_dir = os.path.dirname(__file__)
         # jaw range
         self.jaw_range = rm.vec(0.0, .004)
+        coupling_offset_pos = np.zeros(3)
+        coupling_offset_rotmat = rm.rotmat_from_euler(0,0, np.pi)
+        self.coupling.loc_flange_pose_list[0] = (coupling_offset_pos, coupling_offset_rotmat)
         # jlc
         self.jlc = rkjlc.JLChain(pos=self.coupling.gl_flange_pose_list[0][0],
                                  rotmat=self.coupling.gl_flange_pose_list[0][1], n_dof=2, name=name)
@@ -47,7 +51,7 @@ class WRSTweezer(gpi.GripperInterface):
         self.jlc.jnts[1].lnk.cmodel.rgba = rm.np.array([.5, .5, 1, 1])
         self.jlc.finalize()
         # acting center
-        self.loc_acting_center_pos = rm.vec(-0.024, 0, .122)
+        self.loc_acting_center_pos = coupling_offset_rotmat @ rm.vec(-0.024, 0, .122)
         # collision detection
         # collisions
         self.cdelements = (self.jlc.anchor.lnk_list[0],
@@ -112,7 +116,7 @@ if __name__ == '__main__':
     base = wd.World(cam_pos=[-.5, .0, .08], lookat_pos=[0, 0, 0.08], auto_rotate=False)
     mcm.mgm.gen_frame().attach_to(base)
     gripper = WRSTweezer()
-    gripper.change_jaw_width(0.005)
+    # gripper.change_jaw_width(0.005)
     gripper.gen_meshmodel(toggle_tcp_frame=True, toggle_cdprim=False).attach_to(base)
 
     base.run()

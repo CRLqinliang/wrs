@@ -151,6 +151,30 @@ class EEInterface(object):
                             mgm.gen_sphere(point, radius=.01).attach_to(base)
                         print("mesh collided")
                     return True
+        return
+
+    def is_pcd_collided(self, cmodel_list=None, toggle_dbg=False):
+        """
+        check collision of cd meshes
+        :param cmodel_list:
+        :param toggle_dbg: show cd mesh and draw colliding points in case of collision
+        :return:
+        """
+        if cmodel_list is None:
+            return False
+        if isinstance(cmodel_list, mcm.CollisionModel):
+            cmodel_list = [cmodel_list]
+        for i, cdlnk in enumerate(self.cdelements):
+            if cdlnk.cmodel is not None:
+                is_collided, collision_points = cdlnk.cmodel.is_pcdwith(cmodel_list, True)
+                if is_collided:
+                    if toggle_dbg:
+                        mgm.GeometricModel(cdlnk.cmodel).attach_to(base)
+                        print(collision_points)
+                        for point in collision_points:
+                            mgm.gen_sphere(point, radius=.01).attach_to(base)
+                        print("mesh collided")
+                    return True
         return False
 
     def fix_to(self, pos, rotmat):

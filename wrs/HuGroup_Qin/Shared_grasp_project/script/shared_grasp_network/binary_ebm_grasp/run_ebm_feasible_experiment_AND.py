@@ -26,10 +26,10 @@ def run_ebm_and_evaluation(hidden_dims, num_layers, dropout_rate, batch_size,
     
     # 数据路径
     data_path = os.path.join(f'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project',
-        f'grasps/Bottle/{dataset_type}_{922}.pickle') # temp exp
+        f'grasps/Bottle/{dataset_type}_{data_id}.pickle') # temp exp
 
     grasp_data_path = os.path.join(f'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project',
-        f'grasps/Bottle/bottle_grasp_{922}.pickle')
+        f'grasps/Bottle/bottle_grasp_{data_id}.pickle')
     
     # 根据模式构建模型路径和命令行参数
     cmd = [
@@ -85,7 +85,7 @@ def run_ebm_and_evaluation(hidden_dims, num_layers, dropout_rate, batch_size,
                                            f'model/feasible_best_model/best_model_grasp_{robot_init_exp_name}.pth')
         
         # 构建模型路径 - Table
-        table_init_exp_name = f'ebm_{dataset_type}_{data_id}_h{len(hidden_dims)}_b{batch_size}_lr0.001_t0.5_r{table_init_ratio}_s{train_split}_q{int(use_quaternion)}_sl{int(use_stable_label)}_gtable_stinit'
+        table_init_exp_name = f'ebm_SharedGraspNetwork_bottle_table_experiment_data_{data_id}_h{len(hidden_dims)}_b{batch_size}_lr0.001_t0.5_r{table_init_ratio}_s{train_split}_q{int(use_quaternion)}_sl{int(use_stable_label)}_gtable_stinit'
         table_init_model_path = os.path.join(f'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project',
                                            f'model/feasible_best_model/best_model_grasp_{table_init_exp_name}.pth')
         
@@ -95,7 +95,7 @@ def run_ebm_and_evaluation(hidden_dims, num_layers, dropout_rate, batch_size,
                                           f'model/feasible_best_model/best_model_grasp_{robot_goal_exp_name}.pth')
         
         # 构建模型路径 - Table
-        table_goal_exp_name = f'ebm_{dataset_type}_{data_id}_h{len(hidden_dims)}_b{batch_size}_lr0.001_t0.5_r{table_goal_ratio}_s{train_split}_q{int(use_quaternion)}_sl{int(use_stable_label)}_gtable_stinit'
+        table_goal_exp_name = f'ebm_SharedGraspNetwork_bottle_table_experiment_data_{data_id}_h{len(hidden_dims)}_b{batch_size}_lr0.001_t0.5_r{table_goal_ratio}_s{train_split}_q{int(use_quaternion)}_sl{int(use_stable_label)}_gtable_stinit'
         table_goal_model_path = os.path.join(f'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project',
                                           f'model/feasible_best_model/best_model_grasp_{table_goal_exp_name}.pth')
         
@@ -149,28 +149,28 @@ def main():
     ]
     
     dataset_types = ["SharedGraspNetwork_bottle_experiment_data"]
-    dataset_ids = [57, 83, 109, 352]
+    dataset_ids = [57]
     train_splits = [0.7]
     data_ratios = [0.9] # 10%的数据来测试
     # data_ratios = [75000]
 
     # 运行标准模式实验 (两个模型)
     standard_model_ratio_pairs = [
-        # (0.3, 0.3),   # 低数据量
-        # (0.6, 0.6),   # 中数据量
-        # (0.9, 0.9),   # 高数据量
-        # (0.95, 0.95),
-        # (0.99, 0.99)
-        (75000, 75000) # temp test.
+        (0.3, 0.3),   # 低数据量
+        (0.6, 0.6),   # 中数据量
+        (0.9, 0.9),   # 高数据量
+        (0.95, 0.95),
+        (0.99, 0.99)
+        #(75000, 75000) # temp test.
     ]
     
     # 运行扩展模式实验 (四个模型)
     extended_model_ratio_tuples = [
-        (0.3, 0.3, 0.3, 0.3),  # 低数据量
-        # (0.6, 0.6, 0.6, 0.6),  # 中数据量
-        # (0.9, 0.9, 0.9, 0.9),  # 高数据量
-        # (0.95, 0.95, 0.95, 0.95),
-        # (0.99, 0.99, 0.99, 0.99)
+        #(0.3, 0.3, 0.3, 0.3),  # 低数据量
+        (0.6, 0.6, 0.6, 0.6),  # 中数据量
+        (0.9, 0.9, 0.9, 0.9),  # 高数据量
+        (0.95, 0.95, 0.95, 0.95),
+        (0.99, 0.99, 0.99, 0.99)
     ]
     test_model = ['standard'] # 'standard' or 'extended'
 

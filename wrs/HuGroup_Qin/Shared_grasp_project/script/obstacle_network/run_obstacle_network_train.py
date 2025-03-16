@@ -3,14 +3,14 @@ import sys
 import subprocess
 import argparse
 import time
-import gc
+import gc, pickle
 from ast import parse
 
 import torch
 
 def run_obstacle_network_train(data_path, grasp_info_path, save_path, train_split=0.7,data_ratio=.5, val_split=0.15,
-                              model_type='conv3d', latent_dim=32, beta=1.0, hidden_dims=None, dropout_rate=0.1,
-                              input_size=64, batch_size=32, num_epochs=100, lr=1e-4, lambda_energy=0.5,
+                              model_type='conv3d', latent_dim=32, beta=1.0, hidden_dims=None, vae_dropout_rate=0.2, ebm_dropout_rate=0.1,
+                              input_size=[25, 25, 30], batch_size=32, num_epochs=100, lr=1e-4, lambda_energy=0.5,
                               early_stop_patience=10, seed=42, wandb_project='voxel-grasp-energy',
                               wandb_name=None, train=True, eval=True, load_model=None):
     """运行障碍物网络训练脚本"""
@@ -38,8 +38,9 @@ def run_obstacle_network_train(data_path, grasp_info_path, save_path, train_spli
         '--model_type', model_type,
         '--latent_dim', str(latent_dim),
         '--beta', str(beta),
-        '--dropout_rate', str(dropout_rate),
-        '--input_size', str(input_size),
+        '--vae_dropout_rate', str(vae_dropout_rate),
+        '--ebm_dropout_rate', str(ebm_dropout_rate),
+        '--input_size', str(input_size[0]), str(input_size[1]), str(input_size[2]),
         '--batch_size', str(batch_size),
         '--num_epochs', str(num_epochs),
         '--lr', str(lr),
@@ -53,19 +54,14 @@ def run_obstacle_network_train(data_path, grasp_info_path, save_path, train_spli
     for dim in hidden_dims:
         cmd.extend(['--hidden_dims', str(dim)])
     
+    # 添加input_size参数
+    for dim in input_size:
+        cmd.extend(['--input_size', str(dim)])
+    
     # 添加可选参数
     if wandb_name:
         cmd.extend(['--wandb_name', wandb_name])
-    
-    if train:
-        cmd.append('--train')
-    
-    if eval:
-        cmd.append('--eval')
-    
-    if load_model:
-        cmd.extend(['--load_model', load_model])
-    
+
     # 打印命令行命令    
     print("执行命令:", " ".join(cmd))
     
@@ -87,52 +83,54 @@ def parse_args():
                       help='训练集比例')
     parser.add_argument('--val_split', type=float, default=0.15,
                       help='验证集比例')
-    parser.add_argument('--data_ratio', type=float, default=0.5, help="training dataset ratio.")
+    parser.add_argument('--data_ratio', type=float, default=0.1, help="training dataset ratio.")
+    parser.add_argument('--num_workers', type=int, default=24, help='数据加载的worker数量')
+    parser.add_argument('--prefetch_factor', type=int, default=16, help='数据预取因子')
     
     # 模型参数
     parser.add_argument('--model_type', type=str, default='mlp', choices=['conv3d', 'mlp'],
                       help='VAE模型类型: conv3d或mlp')
-    parser.add_argument('--latent_dim', type=int, default=32,
+    parser.add_argument('--latent_dim', type=int, default=32, # 64
                       help='潜在空间维度')
-    parser.add_argument('--beta', type=float, default=1.0,
+    parser.add_argument('--beta', type=float, default=0.05,
                       help='beta-VAE的beta参数')
     parser.add_argument('--hidden_dims', type=int, nargs='+', default=[512, 512, 512],
                       help='能量模型的隐藏层维度')
-    parser.add_argument('--dropout_rate', type=float, default=0.1,
+    parser.add_argument('--ebm_dropout_rate', type=float, default=0.1,
                       help='dropout率')
-    parser.add_argument('--input_size', type=int, default=64,
-                      help='输入体素的尺寸')
+    parser.add_argument('--vae_dropout_rate', type=float, default=0.3,
+                      help='dropout率')
+    parser.add_argument('--input_size', type=int, nargs='+', default=[25, 25, 30],
+                      help='输入体素的尺寸 [高度, 宽度, 深度]')
     
     # 训练参数
-    parser.add_argument('--batch_size', type=int, default=64,
+    parser.add_argument('--batch_size', type=int, default=1024,
                       help='批次大小')
-    parser.add_argument('--num_epochs', type=int, default=100,
+    parser.add_argument('--num_epochs', type=int, default=150,
                       help='训练轮数')
-    parser.add_argument('--lr', type=float, default=1e-4,
+    parser.add_argument('--lr', type=float, default=2e-3,
                       help='学习率')
-    parser.add_argument('--lambda_energy', type=float, default=1,
+    parser.add_argument('--lambda_energy', type=float, default=1e3,
                       help='能量损失权重')
-    parser.add_argument('--early_stop_patience', type=int, default=10,
+    parser.add_argument('--early_stop_patience', type=int, default=30,
                       help='早停耐心值')
     parser.add_argument('--seed', type=int, default=42,
                       help='随机种子')
-    
+
     # 保存和日志
     parser.add_argument('--wandb_project', type=str, default='Voxel_energy_experiments',
                       help='Wandb项目名称')
-    parser.add_argument('--wandb_name', type=str, default="VAE-EBM_Obstacle_network_train",
+    parser.add_argument('--wandb_name', type=str, default=None,
                       help='Wandb运行名称')
     
     # 运行模式
-    parser.add_argument('--train', action='store_true',
-                      help='训练模型')
-    parser.add_argument('--eval', action='store_true',
-                      help='评估模型')
-    parser.add_argument('--load_model', type=str, default=None,
-                      help='加载已有模型路径')
+    parser.add_argument('--train', action='store_true', help='训练模型')
+    parser.add_argument('--eval', action='store_true', help='评估模型')
+    parser.add_argument('--load_model', type=str, default=None, help='加载预训练模型的路径')
+    parser.add_argument('--disable_multiprocessing', action='store_true', help='禁用多进程数据加载，解决序列化问题')
     
     # 实验名称定制
-    parser.add_argument('--exp_name', type=str, default=None,
+    parser.add_argument('--exp_name', type=str, default="Bottle",
                       help='实验名称（用于构建wandb_name和save_path）')
     
     # GPU选择
@@ -168,7 +166,7 @@ def main():
     print(f"Wandb项目: {args.wandb_project}, 运行名称: {args.wandb_name}")
     print(f"运行模式: {'训练' if args.train else ''} {'评估' if args.eval else ''}")
     print(f"GPU ID: {args.gpu}")
-    
+
     # 运行训练
     run_obstacle_network_train(
             data_path=args.data_path,
@@ -181,7 +179,8 @@ def main():
             latent_dim=args.latent_dim,
             beta=args.beta,
             hidden_dims=args.hidden_dims,
-            dropout_rate=args.dropout_rate,
+            ebm_dropout_rate = args.ebm_dropout_rate,
+            vae_dropout_rate = args.vae_dropout_rate,
             input_size=args.input_size,
             batch_size=args.batch_size,
             num_epochs=args.num_epochs,
@@ -193,7 +192,8 @@ def main():
             wandb_name=args.wandb_name,
             train=args.train,
             eval=args.eval,
-            load_model=args.load_model
+            load_model=args.load_model,
+            disable_multiprocessing=args.disable_multiprocessing
     )
 
 

@@ -1,12 +1,14 @@
 import copy
 import numpy as np
 from panda3d.core import NodePath, LineSegs, TransparencyAttrib
-from direct.showbase.ShowBase import ShowBase
+import os
+import sys
+sys.path.append("E:/Qin/wrs")
 import wrs.basis.robot_math as rm
 import wrs.basis.data_adapter as da
 import wrs.modeling.model_collection as mmc
 import wrs.basis.trimesh_factory as trm_factory
-
+from direct.showbase.ShowBase import ShowBase
 try:
     import open3d as o3d
 except:
@@ -1335,7 +1337,8 @@ if __name__ == "__main__":
     import wrs.visualization.panda.world as wd
 
     base = wd.World(cam_pos=[1, 1, 1], lookat_pos=[0, 0, 0])
-    objpath = os.path.join(basis.__path__[0], 'objects', 'bunnysim.stl')
+    # objpath = os.path.join(basis.__path__[0], 'objects', 'bunnysim.stl')
+    objpath = r"E:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\bunnysim.stl"
     bunnygm = GeometricModel(objpath)
     bunnygm.rgba = np.array([0.7, 0.7, 0.0, 1.0])
     bunnygm.attach_to(base)
@@ -1364,7 +1367,7 @@ if __name__ == "__main__":
     bunnygm2points = bunnygm2.sample_surface()
     bgm_pcd = gen_pointcloud(bunnygmpoints)
     bgm_pcd.attach_to(base)
-
+    base.run()
     lsgm = gen_linesegs([[np.array([.1, 0, .01]), np.array([.01, 0, .01])],
                          [np.array([.01, 0, .01]), np.array([.1, 0, .1])],
                          [np.array([.1, 0, .1]), np.array([.1, 0, .01])]])

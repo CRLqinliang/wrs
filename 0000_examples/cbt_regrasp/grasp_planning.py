@@ -2,7 +2,7 @@ from wrs import wd, gpa, mcm, rm, cbt
 import wrs.robot_sim.end_effectors.grippers.wrs_gripper.wrs_tweezer as ee
 import os
 
-mesh_name = "part_a"
+mesh_name = "part_b"
 mesh_path = os.path.join(os.getcwd(), "meshes", mesh_name + ".stl")
 
 base = wd.World(cam_pos=rm.np.array([.5, .5, .5]), lookat_pos=rm.np.array([0, 0, 0]))
@@ -24,10 +24,11 @@ grasp_collection = gpa.plan_gripper_grasps(gripper,
                                            toggle_dbg=False)
 print(grasp_collection)
 grasp_collection.save_to_disk(grasp_path)
+
 for grasp in grasp_collection:
     gripper.grip_at_by_pose(jaw_center_pos=grasp.ac_pos, jaw_center_rotmat=grasp.ac_rotmat, jaw_width=grasp.ee_values)
-    gripper.gen_meshmodel(alpha=.1).attach_to(base)
-# base.run()
+    gripper.gen_meshmodel(alpha=.4).attach_to(base)
+base.run()
 
 counter = [0]
 on_screen = []
@@ -40,7 +41,7 @@ def update(on_screen, counter, gripper, grasp_collection, task):
         counter[0] = 0
     grasp = grasp_collection[counter[0]]
     gripper.grip_at_by_pose(jaw_center_pos=grasp.ac_pos, jaw_center_rotmat=grasp.ac_rotmat, jaw_width=grasp.ee_values)
-    on_screen.append(gripper.gen_meshmodel(alpha=.5))
+    on_screen.append(gripper.gen_meshmodel(alpha=1))
     on_screen[-1].attach_to(base)
     if base.inputmgr.keymap['space']:
         counter[0] += 1

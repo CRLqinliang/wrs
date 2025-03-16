@@ -31,6 +31,8 @@ import seaborn as sns
 import gc
 import random
 import os
+from sklearn.metrics import roc_curve
+from sklearn.metrics import precision_recall_curve
 
 class SharedGraspEnergyDataset(Dataset):
     def __init__(self, data, grasp_pickle_file, use_quaternion=False, use_stable_label=True, 
@@ -288,10 +290,10 @@ class SharedGraspEnergyDataset(Dataset):
     
     def __getitem__(self, idx):
         return self.all_features[idx], self.all_labels[idx]
-    
-    
-def collect_model_predictions_with_mode(models, test_loader, grasp_file, device, mode="standard"):
-    """收集能量模型的预测结果，支持不同模式
+
+
+def collect_model_predictions_with_mode2(models, test_loader, grasp_file, device, thresholds, mode="standard"):
+    """收集能量模型的预测结果，使用各模型自带阈值进行逻辑AND操作
     
     Args:
         models: 模型字典，包含不同模式需要的模型
@@ -300,34 +302,33 @@ def collect_model_predictions_with_mode(models, test_loader, grasp_file, device,
         test_loader: 测试数据加载器
         grasp_file: 抓取文件路径
         device: 计算设备
+        thresholds: 各模型的阈值字典，格式与models相同
         mode: 评估模式，可以是 "standard"(标准，两个模型) 或 "extended"(扩展，四个模型)
         
     注意:
-        此函数实现了能量输出的标准化。每个模型的能量输出将进行Z-Score标准化处理：
-        normalized_energy = (energy - mean(energy)) / std(energy)
-        这确保了来自不同模型的能量贡献在相加前具有可比性，防止某个模型主导最终决策。
+        此函数不对能量进行标准化，而是直接使用各模型的阈值进行二元判断，然后通过逻辑AND操作得到最终结果。
     """
     # 将所有模型设置为评估模式
     for model in models.values():
         model.eval()
     
     all_labels = []
-    all_energies_init = []  # init状态的能量
-    all_energies_goal = []  # goal状态的能量
-    all_combined_energies = []  # 全部能量的组合
-
-    # 收集所有批次的能量值
-    all_init_energies = []
-    all_goal_energies = []
+    all_binary_predictions = {}  # 存储各模型的二元预测结果
+    all_energies = {}  # 存储各模型的原始能量值
+    all_combined_binary = []  # 存储逻辑AND后的最终二元预测结果
     
-    # 扩展模式需要的列表
-    if mode == "extended":
-        all_robot_init_energies = []
-        all_table_init_energies = []
-        all_robot_goal_energies = []
-        all_table_goal_energies = []
+    # 初始化模型列表
+    if mode == "standard":
+        model_keys = ['init', 'goal']
+    else:  # mode == "extended"
+        model_keys = ['robot_init', 'table_init', 'robot_goal', 'table_goal']
+    
+    # 初始化预测结果字典
+    for key in model_keys:
+        all_binary_predictions[key] = []
+        all_energies[key] = []
 
-    # 第一次循环：收集所有能量值
+    # 收集所有批次的预测结果
     with torch.no_grad():
         for inputs, labels in test_loader:
             inputs = inputs.to(device).float()
@@ -358,15 +359,27 @@ def collect_model_predictions_with_mode(models, test_loader, grasp_file, device,
             # 构建初始状态和目标状态的特征输入
             init_features = torch.cat([init_obj_pose, init_stable, grasp_pose], dim=1)
             goal_features = torch.cat([goal_obj_pose, goal_stable, grasp_pose], dim=1)
+
             
-            # 根据不同模式计算能量并存储原始输出
             if mode == "standard":
                 # 标准模式：使用两个模型分别预测init和goal状态
                 init_energies = models['init'](init_features).cpu().numpy()
                 goal_energies = models['goal'](goal_features).cpu().numpy()
                 
-                all_init_energies.append(init_energies)
-                all_goal_energies.append(goal_energies)
+                # 存储原始能量值
+                all_energies['init'].append(init_energies)
+                all_energies['goal'].append(goal_energies)
+                
+                # 根据阈值进行二元判断
+                init_binary = (init_energies < thresholds['init']).astype(np.int32)
+                goal_binary = (goal_energies < thresholds['goal']).astype(np.int32)
+                
+                # 存储二元预测结果
+                all_binary_predictions['init'].append(init_binary)
+                all_binary_predictions['goal'].append(goal_binary)
+                
+                # 逻辑AND操作
+                combined_binary = np.minimum(init_binary, goal_binary)
                 
             elif mode == "extended":
                 # 扩展模式：使用四个模型预测
@@ -375,16 +388,230 @@ def collect_model_predictions_with_mode(models, test_loader, grasp_file, device,
                 robot_goal_energies = models['robot_goal'](goal_features).cpu().numpy()
                 table_goal_energies = models['table_goal'](goal_features).cpu().numpy()
                 
+                # 存储原始能量值
+                all_energies['robot_init'].append(robot_init_energies)
+                all_energies['table_init'].append(table_init_energies)
+                all_energies['robot_goal'].append(robot_goal_energies)
+                all_energies['table_goal'].append(table_goal_energies)
+                
+                # 根据阈值进行二元判断
+                robot_init_binary = (robot_init_energies < thresholds['robot_init']).astype(np.int32)
+                table_init_binary = (table_init_energies < thresholds['table_init']).astype(np.int32)
+                robot_goal_binary = (robot_goal_energies < thresholds['robot_goal']).astype(np.int32)
+                table_goal_binary = (table_goal_energies < thresholds['table_goal']).astype(np.int32)
+                
+                # 存储二元预测结果
+                all_binary_predictions['robot_init'].append(robot_init_binary)
+                all_binary_predictions['table_init'].append(table_init_binary)
+                all_binary_predictions['robot_goal'].append(robot_goal_binary)
+                all_binary_predictions['table_goal'].append(table_goal_binary)
+                
+                # 逻辑AND操作 - 先合并init和goal的结果
+                init_binary = np.minimum(robot_init_binary, table_init_binary)
+                goal_binary = np.minimum(robot_goal_binary, table_goal_binary)
+                combined_binary = np.minimum(init_binary, goal_binary)
+            
+            # 存储最终的二元预测结果和标签
+            all_combined_binary.append(combined_binary)
+            all_labels.append(labels)
+
+    # 合并所有批次的结果
+    all_labels = np.concatenate(all_labels)
+    all_combined_binary = np.concatenate(all_combined_binary)
+    
+    # 合并各模型的预测结果
+    for key in model_keys:
+        all_binary_predictions[key] = np.concatenate(all_binary_predictions[key])
+        all_energies[key] = np.concatenate(all_energies[key])
+    
+    return all_labels, all_binary_predictions, all_energies, all_combined_binary
+
+
+def evaluate_binary_predictions(all_labels, all_combined_binary):
+    """评估二元预测结果的性能
+    
+    Args:
+        all_labels: 真实标签
+        all_combined_binary: 通过逻辑AND操作得到的二元预测结果
+        
+    Returns:
+        evaluation_results: 包含各种评估指标的字典
+    """
+    # 计算评估指标
+    accuracy = accuracy_score(all_labels, all_combined_binary) * 100
+    precision = precision_score(all_labels, all_combined_binary, average='binary', zero_division=0)
+    recall = recall_score(all_labels, all_combined_binary, average='binary', zero_division=0)
+    f1 = f1_score(all_labels, all_combined_binary, average='binary', zero_division=0)
+    
+    # 返回评估结果
+    return {
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1
+    }
+
+
+def evaluate_with_model_thresholds(models, data_loader, grasp_file, device, thresholds_dict, mode="standard"):
+    """使用各模型自带阈值在数据集上评估模型性能
+    
+    Args:
+        models: 模型字典
+        data_loader: 数据加载器
+        grasp_file: 抓取文件路径
+        device: 计算设备
+        thresholds_dict: 各模型的阈值字典，格式与models相同
+        mode: 评估模式，可以是 "standard"(标准) 或 "extended"(扩展)
+    
+    Returns:
+        evaluation_results: 包含各种评估指标的字典
+    """
+    # 收集模型预测
+    all_labels, all_binary_predictions, all_energies, all_combined_binary = collect_model_predictions_with_mode2(
+        models, data_loader, grasp_file, device, thresholds_dict, mode
+    )
+
+    # all_labels, all_binary_predictions, all_energies, all_combined_binary = collect_model_predictions_with_mode(
+    #     models, data_loader, grasp_file, device, thresholds_dict, mode
+    # )
+    
+    # 评估二元预测结果
+    results = evaluate_binary_predictions(all_labels, all_combined_binary)
+    
+    print(f"\n使用各模型自带阈值的评估结果:")
+    print(f"准确率: {results['accuracy']:.2f}%")
+    print(f"Precision: {results['precision']:.4f}")
+    print(f"Recall: {results['recall']:.4f}")
+    print(f"F1 Score: {results['f1']:.4f}")
+
+    return results
+
+
+def test_AND_model_with_fixed_thresholds(models, test_loader, val_loader, grasp_file, device, thresholds_dict, mode="standard"):
+    """使用固定阈值评估模型在测试集和验证集上的性能"""
+    # 在测试集上评估
+    print("\n在测试集上评估...")
+    # 使用与optimal_f1_threshold相同的函数收集预测
+    all_labels, all_energies_init, all_energies_goal, all_combined_energies = collect_model_predictions_with_mode(
+        models, test_loader, grasp_file, device, mode)
+    
+    # 使用阈值进行评估
+    test_results = evaluate_combined_threshold(all_labels, all_combined_energies, thresholds_dict['init'])
+    
+    # 在验证集上评估
+    print("\n在验证集上评估...")
+    all_labels, all_energies_init, all_energies_goal, all_combined_energies = collect_model_predictions_with_mode(
+        models, val_loader, grasp_file, device, mode)
+    
+    val_results = evaluate_combined_threshold(all_labels, all_combined_energies, thresholds_dict['init'])
+    
+    # 输出结果
+    print(f"\n使用各模型自带阈值的评估结果:")
+    print(f"准确率: {test_results['accuracy']:.2f}%")
+    print(f"Precision: {test_results['precision_binary']:.4f}")
+    print(f"Recall: {test_results['recall_binary']:.4f}")
+    print(f"F1 Score: {test_results['f1_binary']:.4f}")
+    
+    return test_results, val_results
+
+
+# - - -
+
+def collect_model_predictions_with_mode(models, test_loader, grasp_file, device, mode="standard"):
+    """收集能量模型的预测结果，支持不同模式
+
+    Args:
+        models: 模型字典，包含不同模式需要的模型
+            - 标准模式(standard): {'init': model1, 'goal': model2}
+            - 扩展模式(extended): {'robot_init': model1, 'table_init': model2, 'robot_goal': model3, 'table_goal': model4}
+        test_loader: 测试数据加载器
+        grasp_file: 抓取文件路径
+        device: 计算设备
+        mode: 评估模式，可以是 "standard"(标准，两个模型) 或 "extended"(扩展，四个模型)
+
+    注意:
+        此函数实现了能量输出的标准化。每个模型的能量输出将进行Z-Score标准化处理：
+        normalized_energy = (energy - mean(energy)) / std(energy)
+        这确保了来自不同模型的能量贡献在相加前具有可比性，防止某个模型主导最终决策。
+    """
+    # 将所有模型设置为评估模式
+    for model in models.values():
+        model.eval()
+
+    all_labels = []
+    all_energies_init = []  # init状态的能量
+    all_energies_goal = []  # goal状态的能量
+    all_combined_energies = []  # 全部能量的组合
+
+    # 收集所有批次的能量值
+    all_init_energies = []
+    all_goal_energies = []
+
+    # 扩展模式需要的列表
+    if mode == "extended":
+        all_robot_init_energies = []
+        all_table_init_energies = []
+        all_robot_goal_energies = []
+        all_table_goal_energies = []
+
+    # 第一次循环：收集所有能量值
+    with torch.no_grad():
+        for inputs, labels in test_loader:
+            inputs = inputs.to(device).float()
+            labels = labels.cpu().numpy()
+
+            # 判断是否使用quaternion表示
+            feature_dim = inputs.shape[1]
+            is_quaternion = (feature_dim > 22)
+
+            # 确定各部分的维度
+            obj_pose_dim = 7 if is_quaternion else 3
+            stable_dim = 5  # 假设stable label的one-hot编码维度为5
+            grasp_pose_dim = 7  # 抓取位姿始终为7维
+
+            # 计算各部分在特征中的位置
+            init_pose_end = obj_pose_dim
+            init_stable_end = init_pose_end + stable_dim
+            goal_pose_end = init_stable_end + obj_pose_dim
+            goal_stable_end = goal_pose_end + stable_dim
+
+            # 提取各个部分的特征
+            init_obj_pose = inputs[:, :init_pose_end]
+            init_stable = inputs[:, init_pose_end:init_stable_end]
+            goal_obj_pose = inputs[:, init_stable_end:goal_pose_end]
+            goal_stable = inputs[:, goal_pose_end:goal_stable_end]
+            grasp_pose = inputs[:, goal_stable_end:]
+
+            # 构建初始状态和目标状态的特征输入
+            init_features = torch.cat([init_obj_pose, init_stable, grasp_pose], dim=1)
+            goal_features = torch.cat([goal_obj_pose, goal_stable, grasp_pose], dim=1)
+
+            # 根据不同模式计算能量并存储原始输出
+            if mode == "standard":
+                # 标准模式：使用两个模型分别预测init和goal状态
+                init_energies = models['init'](init_features).cpu().numpy()
+                goal_energies = models['goal'](goal_features).cpu().numpy()
+
+                all_init_energies.append(init_energies)
+                all_goal_energies.append(goal_energies)
+
+            elif mode == "extended":
+                # 扩展模式：使用四个模型预测
+                robot_init_energies = models['robot_init'](init_features).cpu().numpy()
+                table_init_energies = models['table_init'](init_features).cpu().numpy()
+                robot_goal_energies = models['robot_goal'](goal_features).cpu().numpy()
+                table_goal_energies = models['table_goal'](goal_features).cpu().numpy()
+
                 all_robot_init_energies.append(robot_init_energies)
                 all_table_init_energies.append(table_init_energies)
                 all_robot_goal_energies.append(robot_goal_energies)
                 all_table_goal_energies.append(table_goal_energies)
-            
+
             all_labels.append(labels)
 
     # 合并所有批次的能量值
     all_labels = np.concatenate(all_labels)
-    
+
     if mode == "standard":
         # 标准模式处理
         all_init_energies = np.concatenate(all_init_energies)
@@ -398,7 +625,7 @@ def collect_model_predictions_with_mode(models, test_loader, grasp_file, device,
         all_energies_init = init_energies_norm
         all_energies_goal = goal_energies_norm
         all_combined_energies = init_energies_norm + goal_energies_norm
-        
+
     elif mode == "extended":
         # 扩展模式处理
         all_robot_init_energies = np.concatenate(all_robot_init_energies)
@@ -407,16 +634,20 @@ def collect_model_predictions_with_mode(models, test_loader, grasp_file, device,
         all_table_goal_energies = np.concatenate(all_table_goal_energies)
 
         # 全局标准化
-        robot_init_norm = (all_robot_init_energies - np.mean(all_robot_init_energies)) / (np.std(all_robot_init_energies) + 1e-8)
-        table_init_norm = (all_table_init_energies - np.mean(all_table_init_energies)) / (np.std(all_table_init_energies) + 1e-8)
-        robot_goal_norm = (all_robot_goal_energies - np.mean(all_robot_goal_energies)) / (np.std(all_robot_goal_energies) + 1e-8)
-        table_goal_norm = (all_table_goal_energies - np.mean(all_table_goal_energies)) / (np.std(all_table_goal_energies) + 1e-8)
+        robot_init_norm = (all_robot_init_energies - np.mean(all_robot_init_energies)) / (
+                    np.std(all_robot_init_energies) + 1e-8)
+        table_init_norm = (all_table_init_energies - np.mean(all_table_init_energies)) / (
+                    np.std(all_table_init_energies) + 1e-8)
+        robot_goal_norm = (all_robot_goal_energies - np.mean(all_robot_goal_energies)) / (
+                    np.std(all_robot_goal_energies) + 1e-8)
+        table_goal_norm = (all_table_goal_energies - np.mean(all_table_goal_energies)) / (
+                    np.std(all_table_goal_energies) + 1e-8)
 
         # 合并结果
         all_energies_init = robot_init_norm + table_init_norm
         all_energies_goal = robot_goal_norm + table_goal_norm
         all_combined_energies = all_energies_init + all_energies_goal
-    
+
     return all_labels, all_energies_init, all_energies_goal, all_combined_energies
 
 
@@ -424,185 +655,82 @@ def evaluate_combined_threshold(all_labels, all_combined_energies, threshold):
     """评估组合能量阈值的性能"""
     y_true = []
     y_pred = []
-    
+
     for idx in range(len(all_labels)):
         labels = all_labels[idx]
         energies = all_combined_energies[idx]
-        
+
         # 获取预测
         pred = np.zeros_like(labels)
         mask = energies.flatten() < threshold
         pred.flat[mask] = 1
-        
+
         y_true.append(labels)
         y_pred.append(pred)
-    
+
     # 将列表转换为数组
     y_true = np.vstack(y_true)
     y_pred = np.vstack(y_pred)
-    
+
     # 计算评估指标
     accuracy = np.mean(np.all(y_true == y_pred, axis=1)) * 100
-    precision_macro = precision_score(y_true, y_pred, average='macro', zero_division=0)
-    recall_macro = recall_score(y_true, y_pred, average='macro', zero_division=0)
-    f1_macro = f1_score(y_true, y_pred, average='macro', zero_division=0)
-    
-    # 计算每个类别的指标
-    precision_per_class = precision_score(y_true, y_pred, average=None, zero_division=0)
-    recall_per_class = recall_score(y_true, y_pred, average=None, zero_division=0)
-    f1_per_class = f1_score(y_true, y_pred, average=None, zero_division=0)
-    
+    precision_binary = precision_score(y_true, y_pred, average='binary', zero_division=0)
+    recall_binary = recall_score(y_true, y_pred, average='binary', zero_division=0)
+    f1_binary = f1_score(y_true, y_pred, average='binary', zero_division=0)
+
+
     # 返回评估结果
     return {
         "threshold": threshold,
         "accuracy": accuracy,
-        "precision_macro": precision_macro,
-        "recall_macro": recall_macro,
-        "f1_macro": f1_macro,
-        "precision_per_class": precision_per_class,
-        "recall_per_class": recall_per_class,
-        "f1_per_class": f1_per_class
+        "precision_binary": precision_binary,
+        "recall_binary": recall_binary,
+        "f1_binary": f1_binary
     }
 
 
-def evaluate_with_threshold(models, data_loader, grasp_file, device, threshold, mode="standard"):
-    """使用给定阈值在数据集上评估模型性能
+def optimal_f1_threshold(models, test_loader, grasp_file, device, mode="standard"):
+    """直接计算最佳F1分数对应的阈值
     
     Args:
         models: 模型字典
-        data_loader: 数据加载器
-        grasp_file: 抓取文件路径
-        device: 计算设备
-        threshold: 固定的能量阈值
-        mode: 评估模式，可以是 "standard"(标准) 或 "extended"(扩展)
-    
-    Returns:
-        evaluation_results: 包含各种评估指标的字典
-    """
-    # 收集模型预测
-    all_labels, all_energies_init, all_energies_goal, all_combined_energies = collect_model_predictions_with_mode(
-        models, data_loader, grasp_file, device, mode)
-    
-    # 使用固定阈值评估性能
-    results = evaluate_combined_threshold(all_labels, all_combined_energies, threshold)
-    
-    print(f"\n使用阈值 {threshold:.3f} 的评估结果:")
-    print(f"准确率: {results['accuracy']:.2f}%")
-    print(f"Precision: {results['precision_macro']:.4f}")
-    print(f"Recall: {results['recall_macro']:.4f}")
-    print(f"F1 Score: {results['f1_macro']:.4f}")
-    
-    return results
-
-
-def test_AND_model_with_dataset(models, test_loader, grasp_file, device, thresholds, mode="standard", verbose=True):
-    """在测试集上寻找最佳阈值
-    
-    Args:
-        models: 模型字典，格式取决于mode参数
         test_loader: 测试数据加载器
         grasp_file: 抓取文件路径
         device: 计算设备
-        thresholds: 用于评估的能量阈值列表
-        mode: 评估模式，可以是 "standard"(标准，两个模型) 或 "extended"(扩展，四个模型)
-        verbose: 是否输出详细信息
+        mode: 评估模式
     """
     # 收集模型预测
     all_labels, all_energies_init, all_energies_goal, all_combined_energies = collect_model_predictions_with_mode(
         models, test_loader, grasp_file, device, mode)
     
-    # 初始化结果数组
-    precision_array = np.zeros(len(thresholds))
-    recall_array = np.zeros(len(thresholds))
-    f1_array = np.zeros(len(thresholds))
-    accuracy_array = np.zeros(len(thresholds))
+    # 计算精确率-召回率曲线
+    # 注意：能量值越低表示越可能是正样本，所以需要取负值
+    precision, recall, thresholds = precision_recall_curve(all_labels, -all_combined_energies)
     
-    # 存储所有结果
-    results_data = []
+    # 计算每个阈值点的F1分数
+    f1_scores = 2 * (precision * recall) / (precision + recall + 1e-10)
     
-    # 初始化最佳结果跟踪
-    best_f1 = -1
-    best_threshold = 0
-    best_results = None
+    # 找到F1分数最大的索引
+    best_idx = np.argmax(f1_scores)
     
-    # 遍历阈值
-    for i, threshold in enumerate(tqdm.tqdm(thresholds, desc="测试阈值")):
-        # 评估当前阈值
-        results = evaluate_combined_threshold(
-            all_labels, all_combined_energies, threshold
-        )
-        
-        # 记录结果
-        precision_array[i] = results['precision_macro']
-        recall_array[i] = results['recall_macro']
-        f1_array[i] = results['f1_macro']
-        accuracy_array[i] = results['accuracy']
-        
-        results_data.append(results)
-        
-        # 更新最佳结果
-        if results['f1_macro'] > best_f1:
-            best_f1 = results['f1_macro']
-            best_threshold = threshold
-            best_results = results
-
-        # 输出当前结果
-        if verbose and i % 5 == 0:
-            print(f"\nThreshold = {threshold:.2f}:")
-            print(f"Accuracy: {results['accuracy']:.2f}%")
-            print(f"Macro - P: {results['precision_macro']:.4f}, "
-                  f"R: {results['recall_macro']:.4f}, "
-                  f"F1: {results['f1_macro']:.4f}")
-
-    # 可视化F1分数随阈值变化
-    plt.figure(figsize=(10, 6))
-    plt.plot(thresholds, f1_array, marker='o', linestyle='-', color='blue')
-    plt.axvline(x=best_threshold, color='red', linestyle='--', label=f'Best Threshold: {best_threshold:.3f}')
-    plt.grid(True)
-    plt.xlabel('Combined Energy Threshold')
-    plt.ylabel('F1 Score')
-    plt.title('F1 Score vs Combined Energy Threshold (Test Set)')
-    plt.legend()
-    plt.savefig('f1_vs_threshold_test.png')
+    # 获取对应的阈值
+    # 注意：precision_recall_curve返回的thresholds比precision和recall少一个元素
+    if best_idx < len(thresholds):
+        best_threshold = -thresholds[best_idx]  # 需要转回原始能量的符号
+    else:
+        # 如果最佳点是最后一个，则使用一个极小值
+        best_threshold = np.min(all_combined_energies) - 1.0
     
-    # 记录结果到wandb
-    wandb.log({
-        "test_best_f1": best_f1,
-        "best_threshold": best_threshold,
-        "test_precision_vs_threshold": wandb.plot.line_series(
-            xs=thresholds.tolist(),
-            ys=[precision_array.tolist()],
-            keys=["Precision"],
-            title="Test Precision vs Threshold",
-            xname="Threshold"
-        ),
-        "test_recall_vs_threshold": wandb.plot.line_series(
-            xs=thresholds.tolist(),
-            ys=[recall_array.tolist()],
-            keys=["Recall"],
-            title="Test Recall vs Threshold",
-            xname="Threshold"
-        ),
-        "test_f1_vs_threshold": wandb.plot.line_series(
-            xs=thresholds.tolist(),
-            ys=[f1_array.tolist()],
-            keys=["F1"],
-            title="Test F1 vs Threshold",
-            xname="Threshold"
-        ),
-        "test_f1_vs_threshold_plot": wandb.Image('f1_vs_threshold_test.png')
-    })
+    # 评估最佳阈值
+    best_results = evaluate_combined_threshold(all_labels, all_combined_energies, best_threshold)
+    best_f1 = best_results['f1_binary']
+    
+    print(f"最佳F1分数: {best_f1:.4f}, 对应阈值: {best_threshold:.4f}")
+    
+    return best_results, best_threshold, best_f1
 
-    threshold_results = {
-        'precision': precision_array,
-        'recall': recall_array,
-        'f1': f1_array,
-        'accuracy': accuracy_array,
-        'thresholds': thresholds
-    }
 
-    return best_threshold, best_results, threshold_results
-
+# - - -
 
 def load_raw_data(data_path, ratio=0.5):
     """加载原始数据
@@ -671,6 +799,7 @@ def create_data_loaders(train_dataset, val_dataset, test_dataset, args):
     """创建数据加载器"""
     train_loader = DataLoader(
         train_dataset,
+        shuffle=False,
         batch_size=args.batch_size * 2,
         num_workers=2,
         pin_memory=True,
@@ -709,10 +838,10 @@ def parse_args():
     
     # 数据参数
     parser.add_argument('--test_dataset', type=str, 
-                       default='E:/Qin/wrs/wrs/HuGroup_Qin/Shared_grasp_project/grasps/Bottle/SharedGraspNetwork_bottle_experiment_data_57.pickle',
+                       default='E:/Qin/wrs/wrs/HuGroup_Qin/Shared_grasp_project/grasps/Bottle/SharedGraspNetwork_bottle_experiment_data_922.pickle',
                        help='测试数据集路径')
     parser.add_argument('--grasp_pickle_file', type=str, 
-                       default='E:/Qin/wrs/wrs/HuGroup_Qin/Shared_grasp_project/grasps/Bottle/bottle_grasp_57.pickle',
+                       default='E:/Qin/wrs/wrs/HuGroup_Qin/Shared_grasp_project/grasps/Bottle/bottle_grasp_922.pickle',
                        help='抓取候选文件路径')
     
     # 兼容两种模式的模型路径
@@ -722,10 +851,10 @@ def parse_args():
     
     # 标准模式的模型路径
     parser.add_argument('--model_init_path', type=str, 
-                       default='E:/Qin/wrs/wrs/HuGroup_Qin/Shared_grasp_project/model/feasible_best_model/best_model_grasp_init.pth',
+                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\feasible_best_model\best_model_grasp_ebm_SharedGraspNetwork_bottle_experiment_data_352_h3_b2048_lr0.001_t0.5_r75000_s0.7_q1_sl1_grobot_table_stinit.pth',
                        help='初始状态模型路径 (标准模式)')
     parser.add_argument('--model_goal_path', type=str, 
-                       default='E:/Qin/wrs/wrs/HuGroup_Qin/Shared_grasp_project/model/feasible_best_model/best_model_grasp_goal.pth',
+                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\feasible_best_model\best_model_grasp_ebm_SharedGraspNetwork_bottle_experiment_data_352_h3_b2048_lr0.001_t0.5_r75000_s0.7_q1_sl1_grobot_table_stinit.pth',
                        help='目标状态模型路径 (标准模式)')
     
     # 扩展模式的模型路径
@@ -745,22 +874,23 @@ def parse_args():
     # 数据集参数
     parser.add_argument('--train_split', type=float, default=0.7,
                        help='训练集比例')
-    parser.add_argument('--val_split', type=float, default=0.15,
+    parser.add_argument('--val_split', type=float, default=0.2,
                        help='验证集比例')
     parser.add_argument('--batch_size', type=int, default=32,
                        help='批量大小')
-    parser.add_argument('--data_ratio', type=float, default=0.5,
+    parser.add_argument('--data_ratio', type=float, default=0.70,
                        help='数据比例')
     parser.add_argument('--use_quaternion', type=int, default=1,
                        help='使用四元数 (1) 或欧拉角 (0)')
     parser.add_argument('--use_stable_label', type=int, default=1,
                        help='使用稳定性标签 (1) 或不使用 (0)')
+
     parser.add_argument('--grasp_type', type=str, default='robot_table',
                        choices=['robot_table', 'table', 'robot'],
                        help='使用哪种抓取类型')
     
     # 模型参数
-    parser.add_argument('--input_dim', type=int, default=17) 
+    parser.add_argument('--input_dim', type=int, default=19)
     parser.add_argument('--output_dim', type=int, default=120)
     parser.add_argument('--hidden_dims', nargs='+', type=int, default=[512, 512, 512])
     parser.add_argument('--num_layers', type=int, default=3)
@@ -804,6 +934,7 @@ if __name__ == '__main__':
     # 创建模型和加载权重 - 根据模式选择
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     models = {}
+    thresholds_dict = {}
     
     if args.model_mode == 'standard':
         # 标准模式：使用两个模型
@@ -821,9 +952,13 @@ if __name__ == '__main__':
         models['goal'].load_state_dict(checkpoint_goal['model_state_dict'])
         models['goal'] = models['goal'].to(device).float()
         
+        # 设置各模型的阈值 - 从检查点中获取或使用默认值
+        thresholds_dict['init'] = checkpoint_init.get('optimal_threshold', -5.0)
+        thresholds_dict['goal'] = checkpoint_goal.get('optimal_threshold', -5.0)
+        
         print(f"\n使用标准模式（两个模型）进行评估")
-        print(f"初始状态模型: {os.path.basename(args.model_init_path)}")
-        print(f"目标状态模型: {os.path.basename(args.model_goal_path)}")
+        print(f"初始状态模型: {os.path.basename(args.model_init_path)}, 阈值: {thresholds_dict['init']:.3f}")
+        print(f"目标状态模型: {os.path.basename(args.model_goal_path)}, 阈值: {thresholds_dict['goal']:.3f}")
         
     elif args.model_mode == 'extended':
         # 扩展模式：使用四个模型
@@ -853,77 +988,46 @@ if __name__ == '__main__':
         models['table_goal'].load_state_dict(checkpoint_table_goal['model_state_dict'])
         models['table_goal'] = models['table_goal'].to(device).float()
         
+        # 设置各模型的阈值 - 从检查点中获取或使用默认值
+        thresholds_dict['robot_init'] = checkpoint_robot_init.get('optimal_threshold', -5.0)
+        thresholds_dict['table_init'] = checkpoint_table_init.get('optimal_threshold', -5.0)
+        thresholds_dict['robot_goal'] = checkpoint_robot_goal.get('optimal_threshold', -5.0)
+        thresholds_dict['table_goal'] = checkpoint_table_goal.get('optimal_threshold', -5.0)
+        
         print(f"\n使用扩展模式（四个模型）进行评估")
-        print(f"Robot初始状态模型: {os.path.basename(args.model_robot_init_path)}")
-        print(f"Table初始状态模型: {os.path.basename(args.model_table_init_path)}")
-        print(f"Robot目标状态模型: {os.path.basename(args.model_robot_goal_path)}")
-        print(f"Table目标状态模型: {os.path.basename(args.model_table_goal_path)}")
+        print(f"Robot初始状态模型: {os.path.basename(args.model_robot_init_path)}, 阈值: {thresholds_dict['robot_init']:.3f}")
+        print(f"Table初始状态模型: {os.path.basename(args.model_table_init_path)}, 阈值: {thresholds_dict['table_init']:.3f}")
+        print(f"Robot目标状态模型: {os.path.basename(args.model_robot_goal_path)}, 阈值: {thresholds_dict['robot_goal']:.3f}")
+        print(f"Table目标状态模型: {os.path.basename(args.model_table_goal_path)}, 阈值: {thresholds_dict['table_goal']:.3f}")
     
     # 将所有模型设为评估模式
     for model in models.values():
         model.eval()
 
-    # 设置组合能量阈值范围 - 由于对能量进行了标准化处理，能量值会围绕0分布
-    if args.model_mode == 'standard':
-        thresholds = np.arange(-10, -2, 0.1)  # 扩大范围
-    elif args.model_mode == 'extended':
-        thresholds = np.arange(-5, -4, 0.01)  # 扩大范围
-
     # 初始化wandb
-    wandb.init(project=args.wandb_project, name=args.wandb_name, config=vars(args))
+    # wandb.init(project=args.wandb_project, name=args.wandb_name, config=vars(args))
+    
+    # 添加阈值信息到wandb配置
+    # wandb.config.update({"thresholds": thresholds_dict})
 
-    # 第一步：在测试集上寻找最佳阈值
-    print("\n在测试集上寻找最佳阈值...")
-    best_threshold, test_results, threshold_results = test_AND_model_with_dataset(
-        models, test_loader, args.grasp_pickle_file, device, thresholds, mode=args.model_mode
-    )
-    
-    # 输出测试集上的最佳结果
-    print("\n测试集上的最佳阈值结果:")
-    print(f"组合能量阈值: {best_threshold:.3f}")
-    print(f"准确率: {test_results['accuracy']:.2f}%")
-    print(f"Precision: {test_results['precision_macro']:.4f}")
-    print(f"Recall: {test_results['recall_macro']:.4f}")
-    print(f"F1 Score: {test_results['f1_macro']:.4f}")
-    
-    # 第二步：使用找到的最佳阈值在验证集上评估
-    print("\n使用找到的最佳阈值在验证集上评估...")
-    val_results = evaluate_with_threshold(
-        models, val_loader, args.grasp_pickle_file, device, best_threshold, mode=args.model_mode
-    )
-    
-    # 记录验证集结果到wandb
-    wandb.log({
-        "val_accuracy": val_results['accuracy'],
-        "val_precision": val_results['precision_macro'],
-        "val_recall": val_results['recall_macro'],
-        "val_f1": val_results['f1_macro']
-    })
-    
-    # 输出最终结果对比
-    print("\n=== 结果对比 ===")
-    print(f"最佳阈值: {best_threshold:.3f}")
-    print(f"测试集 - F1: {test_results['f1_macro']:.4f}, Accuracy: {test_results['accuracy']:.2f}%")
-    print(f"验证集 - F1: {val_results['f1_macro']:.4f}, Accuracy: {val_results['accuracy']:.2f}%")
-    
-    # 将最终结果保存到文件
-    results_summary = {
-        'best_threshold': best_threshold,
-        'test_results': test_results,
-        'val_results': val_results,
-        'config': vars(args)
-    }
-    
-    # 创建输出目录
-    os.makedirs('output', exist_ok=True)
-    
-    # 保存结果摘要
-    result_file = f'output/{args.wandb_name}_results.pickle'
-    with open(result_file, 'wb') as f:
-        pickle.dump(results_summary, f)
-    
-    print(f"\n结果已保存到 {result_file}")
+    # 使用固定阈值评估模型
+    # test_results, val_results = test_AND_model_with_fixed_thresholds(
+    #     models, test_loader, val_loader, args.grasp_pickle_file, device, thresholds_dict, mode=args.model_mode
+    # )
 
+    # 在val上最佳数据集后，在test上测试
+    best_results, best_threshold, best_f1 = optimal_f1_threshold(models, val_loader, args.grasp_pickle_file, device, args.model_mode )
+    print("\n best_results : ", best_results)
+    print("\n best_threshold :", best_threshold)
+    print("\n best_f1:", best_f1)
+
+    thresholds_dict['init'] = best_threshold
+    thresholds_dict['goal'] = best_threshold
+    test_results, val_results = test_AND_model_with_fixed_thresholds(
+        models, test_loader, val_loader, args.grasp_pickle_file, device, thresholds_dict, mode=args.model_mode
+    )
+
+    # 检查数据集分布
     def check_dataset_distribution(dataset, name):
         labels = [label.item() for _, label in dataset]
         positive_ratio = sum(labels) / len(labels)

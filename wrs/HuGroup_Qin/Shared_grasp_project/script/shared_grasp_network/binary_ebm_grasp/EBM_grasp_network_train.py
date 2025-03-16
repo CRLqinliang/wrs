@@ -132,7 +132,7 @@ class SharedGraspEnergyDataset(Dataset):
             # 添加初始位姿
             all_features[current_idx:end_idx, feature_start:feature_start+len(init_pose)] = init_pose
             feature_start += len(init_pose)
-            
+
             # 添加目标位姿
             all_features[current_idx:end_idx, feature_start:feature_start+len(goal_pose)] = goal_pose
             feature_start += len(goal_pose)
@@ -140,10 +140,12 @@ class SharedGraspEnergyDataset(Dataset):
             # 如果使用stable_label，添加One-Hot编码
             if self.use_stable_label:
                 init_type_onehot = self.obj_encoder.transform([[item[4]]]).copy()
-                goal_type_onehot = self.obj_encoder.transform([[item[9]]]).copy()
-                
                 all_features[current_idx:end_idx, feature_start:feature_start+len(init_type_onehot[0])] = init_type_onehot
                 feature_start += len(init_type_onehot[0])
+
+
+            if self.use_stable_label:
+                goal_type_onehot = self.obj_encoder.transform([[item[9]]]).copy()
                 all_features[current_idx:end_idx, feature_start:feature_start+len(goal_type_onehot[0])] = goal_type_onehot
                 feature_start += len(goal_type_onehot[0])
                 
@@ -775,8 +777,11 @@ def create_data_loaders(train_dataset, val_dataset, test_dataset, args):
     test_loader = DataLoader(
         test_dataset,
         shuffle=False,
+        batch_size=args.batch_size * 2,
         num_workers=args.num_workers,
-        pin_memory=args.pin_memory
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2
     )
     
     return train_loader, val_loader, test_loader
@@ -844,11 +849,11 @@ def parse_args():
     
     # 数据相关参数
     parser.add_argument('--data_path', type=str, 
-                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\grasp_random_position_bottle_robot_57.pickle')
+                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\SharedGraspNetwork_bottle_experiment_data_57.pickle')
     parser.add_argument('--grasp_data_path', type=str,
                        default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\bottle_grasp_57.pickle')
     parser.add_argument('--model_save_path', type=str,
-                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\Binary_ebm_model\best_model_grasp_robot_57_ebm_selu.pth')
+                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\Binary_ebm_model\best_model_grasp_ebm_selu_SharedGraspNetwork_bottle_experiment_data_57_h3_2048_lr0.001_t0.5_dataratio_0.99_trainsplit_0.7.pth')
     parser.add_argument('--train_split', type=float, default=0.7)
     parser.add_argument('--val_split', type=float, default=0.15)
     
@@ -856,10 +861,10 @@ def parse_args():
     parser.add_argument('--num_workers', type=int, default=8)
     parser.add_argument('--pin_memory', type=bool, default=True)
     parser.add_argument('--pos_ratio', type=float, default=0.33)
-    parser.add_argument('--data_ratio', type=float, default=0.5)
+    parser.add_argument('--data_ratio', type=float, default=0.9)
     
     # 模型结构参数 - 更新为简化的MLP参数
-    parser.add_argument('--input_dim', type=int, default=12)
+    parser.add_argument('--input_dim', type=int, default=31)
     parser.add_argument('--hidden_dims', nargs='+', type=int, default=[512, 512, 512])
     parser.add_argument('--num_layers', type=int, default=3)  # 替换num_res_blocks
     parser.add_argument('--dropout_rate', type=float, default=0.1)
@@ -885,7 +890,7 @@ def parse_args():
     
     # 其他参数
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--train_model', type=bool, default=True)
+    parser.add_argument('--train_model', type=bool, default=False)
     parser.add_argument('--wandb_project', type=str, default='grasp_ebm')
     parser.add_argument('--wandb_name', type=str, default='grasp_random_position_bottle_robot_57_ebm_selu')
     
@@ -903,7 +908,7 @@ def main():
     set_seed(args.seed)
     
     # 初始化wandb
-    wandb.init(project=args.wandb_project, name=args.wandb_name, config=vars(args))
+    # wandb.init(project=args.wandb_project, name=args.wandb_name, config=vars(args))
     
     # 加载原始数据
     raw_data = load_raw_data(args.data_path, args.data_ratio)
@@ -939,11 +944,11 @@ def main():
             early_stop_patience=args.early_stop_patience
         )
         print("开始评估模型...")
-        evaluate_model(model, val_loader, device, args)
+        evaluate_model(model, test_loader, device, args)
     else:
         # 评估模型
         print("开始评估模型...")
-        evaluate_model(model, val_loader, device, args)
+        evaluate_model(model, test_loader, device, args)
 
 
 if __name__ == '__main__':

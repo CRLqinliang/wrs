@@ -2,6 +2,7 @@ import numpy as np
 from PIL import Image
 from cv2 import aruco
 
+
 _MM_TO_INCH = 0.0393701
 
 
@@ -211,12 +212,13 @@ def make_dual_marker(marker_dict=aruco.DICT_4X4_250,
 
 
 def make_multi_marker(marker_dict=aruco.DICT_4X4_250,
-                      id_list=[0, 1, 2, 3, 4, 5],
-                      marker_pos_list=((-80, 30), (-80,0), (-80,-30), (80,30), (80,0), (80,-30)),
-                      marker_size=25,
+                      id_list=[0, 1, 2, 3],
+                      marker_pos_list=((-50, 60),  (-50,-60),
+                                       (50, 60),   (50,-60)),
+                      marker_size=90,
                       savepath='./',
-                      name='test',
-                      frame_size=(190, 130),
+                      name='test_multi_marker',
+                      frame_size=(190, 230),
                       paper_width=210,
                       paper_height=297,
                       dpi=600):
@@ -444,13 +446,5 @@ if __name__ == '__main__':
     # make_dual_marker(marker_dict=aruco.DICT_4X4_250, marker_size=45, dpi=600)
     # makechessboard(1, 1, square_size=35, frame_size = [100,150])
 
-    make_multi_marker(marker_dict=aruco.DICT_4X4_250,
-                      id_list=[0, 1, 2, 3, 4, 5, 6, 7],
-                      marker_pos_list=((-77.5, 37.5), (-77.5, 12.5), (-77.5, -12.5), (-77.5, -37.5), (77.5, 37.5), (77.5, 12.5), (77.5, -12.5), (77.5, -37.5)),
-                      marker_size=20,
-                      savepath='./',
-                      name='test',
-                      frame_size=(180, 130),
-                      paper_width=210,
-                      paper_height=297,
-                      dpi=600)
+    # 调用函数生成PDF
+    make_multi_marker()
