@@ -4,7 +4,7 @@ import networkx as nx
 from wrs import wd, rm, mcm, x6wg2, fsp, fsreg, gg
 
 base = wd.World(cam_pos=rm.vec(1, 1, 1), lookat_pos=rm.vec(0, 0, 0))
-obj_path = os.path.join("objects", "bunnysim.stl")
+obj_path = os.path.join("objects", "Bunnysim.stl")
 ground = mcm.gen_box(xyz_lengths=rm.vec(5, 5, 1), pos=rm.vec(0, 0, -0.5))
 ground.show_cdprim()
 ground.attach_to(base)

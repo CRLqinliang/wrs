@@ -8,7 +8,7 @@ from wrs import robot_sim as xss, modeling as gm, modeling as cm
 base = wd.World(cam_pos=[3, 1, 2], lookat_pos=[0, 0, 0])
 gm.gen_frame().attach_to(base)
 # object
-object = cm.CollisionModel("./objects/bunnysim.stl")
+object = cm.CollisionModel("./objects/Bunnysim.stl")
 object.set_pos(np.array([.85, 0, .37]))
 object.set_rgba([.5, .7, .3, 1])
 object.attach_to(base)

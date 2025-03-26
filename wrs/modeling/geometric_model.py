@@ -1337,7 +1337,7 @@ if __name__ == "__main__":
     import wrs.visualization.panda.world as wd
 
     base = wd.World(cam_pos=[1, 1, 1], lookat_pos=[0, 0, 0])
-    # objpath = os.path.join(basis.__path__[0], 'objects', 'bunnysim.stl')
+    # objpath = os.path.join(basis.__path__[0], 'objects', 'Bunnysim.stl')
     objpath = r"E:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\bunnysim.stl"
     bunnygm = GeometricModel(objpath)
     bunnygm.rgba = np.array([0.7, 0.7, 0.0, 1.0])

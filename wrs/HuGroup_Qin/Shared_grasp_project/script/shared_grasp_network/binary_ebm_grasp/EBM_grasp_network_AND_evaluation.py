@@ -11,6 +11,8 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.nn.functional import threshold
+
 sys.path.append("E:/Qin/wrs")
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import OneHotEncoder
@@ -292,6 +294,41 @@ class SharedGraspEnergyDataset(Dataset):
         return self.all_features[idx], self.all_labels[idx]
 
 
+def evaluate_with_model_thresholds(models, data_loader, grasp_file, device, thresholds_dict, mode="standard"):
+    """使用各模型自带阈值在数据集上评估模型性能
+    
+    Args:
+        models: 模型字典
+        data_loader: 数据加载器
+        grasp_file: 抓取文件路径
+        device: 计算设备
+        thresholds_dict: 各模型的阈值字典，格式与models相同
+        mode: 评估模式，可以是 "standard"(标准) 或 "extended"(扩展)
+    
+    Returns:
+        evaluation_results: 包含各种评估指标的字典
+    """ 
+    # 收集模型预测
+    all_labels, all_combined_binary = collect_model_predictions_with_mode2(
+        models, data_loader, grasp_file, device, thresholds_dict, mode
+    )
+
+    # all_labels, all_binary_predictions, all_energies, all_combined_binary = collect_model_predictions_with_mode(
+    #     models, data_loader, grasp_file, device, thresholds_dict, mode
+    # )
+    
+    # 评估二元预测结果
+    results = evaluate_binary_predictions(all_labels, all_combined_binary)
+    
+    print(f"\n使用各模型自带阈值的评估结果:")
+    print(f"准确率: {results['accuracy']:.2f}%")
+    print(f"Binary - Precision: {results['precision']:.4f}")
+    print(f"Binary - Recall: {results['recall']:.4f}")
+    print(f"Binary - F1 Score: {results['f1']:.4f}")
+
+    return results
+
+
 def collect_model_predictions_with_mode2(models, test_loader, grasp_file, device, thresholds, mode="standard"):
     """收集能量模型的预测结果，使用各模型自带阈值进行逻辑AND操作
     
@@ -362,21 +399,24 @@ def collect_model_predictions_with_mode2(models, test_loader, grasp_file, device
 
             
             if mode == "standard":
-                # 标准模式：使用两个模型分别预测init和goal状态
-                init_energies = models['init'](init_features).cpu().numpy()
-                goal_energies = models['goal'](goal_features).cpu().numpy()
+                # 标准模式：使用两个模型分别预测init和goal状态 - 能量归一化((利用在训练中获得到的归一化参数)
+                init_energies = models['init'](init_features).cpu().numpy() 
+                goal_energies = models['goal'](goal_features).cpu().numpy() 
                 
                 # 存储原始能量值
-                all_energies['init'].append(init_energies)
-                all_energies['goal'].append(goal_energies)
-                
+                # all_energies['init'].append(init_energies)
+                # all_energies['goal'].append(goal_energies)
+            
                 # 根据阈值进行二元判断
+                # combined_energies = init_energies + goal_energies
+                # combined_binary = (combined_energies < thresholds['init']).astype(np.int32)
+
                 init_binary = (init_energies < thresholds['init']).astype(np.int32)
                 goal_binary = (goal_energies < thresholds['goal']).astype(np.int32)
                 
                 # 存储二元预测结果
-                all_binary_predictions['init'].append(init_binary)
-                all_binary_predictions['goal'].append(goal_binary)
+                # all_binary_predictions['init'].append(init_binary)
+                # all_binary_predictions['goal'].append(goal_binary)
                 
                 # 逻辑AND操作
                 combined_binary = np.minimum(init_binary, goal_binary)
@@ -420,11 +460,11 @@ def collect_model_predictions_with_mode2(models, test_loader, grasp_file, device
     all_combined_binary = np.concatenate(all_combined_binary)
     
     # 合并各模型的预测结果
-    for key in model_keys:
-        all_binary_predictions[key] = np.concatenate(all_binary_predictions[key])
-        all_energies[key] = np.concatenate(all_energies[key])
+    # for key in model_keys:
+    #     all_binary_predictions[key] = np.concatenate(all_binary_predictions[key])
+    #     all_energies[key] = np.concatenate(all_energies[key])
     
-    return all_labels, all_binary_predictions, all_energies, all_combined_binary
+    return all_labels,  all_combined_binary
 
 
 def evaluate_binary_predictions(all_labels, all_combined_binary):
@@ -451,71 +491,36 @@ def evaluate_binary_predictions(all_labels, all_combined_binary):
         "f1": f1
     }
 
-
-def evaluate_with_model_thresholds(models, data_loader, grasp_file, device, thresholds_dict, mode="standard"):
-    """使用各模型自带阈值在数据集上评估模型性能
-    
-    Args:
-        models: 模型字典
-        data_loader: 数据加载器
-        grasp_file: 抓取文件路径
-        device: 计算设备
-        thresholds_dict: 各模型的阈值字典，格式与models相同
-        mode: 评估模式，可以是 "standard"(标准) 或 "extended"(扩展)
-    
-    Returns:
-        evaluation_results: 包含各种评估指标的字典
-    """
-    # 收集模型预测
-    all_labels, all_binary_predictions, all_energies, all_combined_binary = collect_model_predictions_with_mode2(
-        models, data_loader, grasp_file, device, thresholds_dict, mode
-    )
-
-    # all_labels, all_binary_predictions, all_energies, all_combined_binary = collect_model_predictions_with_mode(
-    #     models, data_loader, grasp_file, device, thresholds_dict, mode
-    # )
-    
-    # 评估二元预测结果
-    results = evaluate_binary_predictions(all_labels, all_combined_binary)
-    
-    print(f"\n使用各模型自带阈值的评估结果:")
-    print(f"准确率: {results['accuracy']:.2f}%")
-    print(f"Precision: {results['precision']:.4f}")
-    print(f"Recall: {results['recall']:.4f}")
-    print(f"F1 Score: {results['f1']:.4f}")
-
-    return results
-
+# - - - - - -- - - - - - - 
 
 def test_AND_model_with_fixed_thresholds(models, test_loader, val_loader, grasp_file, device, thresholds_dict, mode="standard"):
     """使用固定阈值评估模型在测试集和验证集上的性能"""
     # 在测试集上评估
     print("\n在测试集上评估...")
     # 使用与optimal_f1_threshold相同的函数收集预测
-    all_labels, all_energies_init, all_energies_goal, all_combined_energies = collect_model_predictions_with_mode(
-        models, test_loader, grasp_file, device, mode)
-    
-    # 使用阈值进行评估
-    test_results = evaluate_combined_threshold(all_labels, all_combined_energies, thresholds_dict['init'])
+    all_labels, all_energies_init, all_energies_goal, all_combined_energies = collect_model_predictions_with_mode(models, test_loader, grasp_file, device, mode)
+
+    # 用归一化之后的阈值进行评估
+    threshold = thresholds_dict['init']
+    # threshold = thresholds_dict['init'] + thresholds_dict['goal']
+    test_results = evaluate_combined_threshold(all_labels, all_combined_energies, threshold)
     
     # 在验证集上评估
-    print("\n在验证集上评估...")
-    all_labels, all_energies_init, all_energies_goal, all_combined_energies = collect_model_predictions_with_mode(
-        models, val_loader, grasp_file, device, mode)
+    # print("\n在验证集上评估...")
+    # all_labels, all_energies_init, all_energies_goal, all_combined_energies = collect_model_predictions_with_mode(
+    #     models, val_loader, grasp_file, device, mode)
     
-    val_results = evaluate_combined_threshold(all_labels, all_combined_energies, thresholds_dict['init'])
+    # val_results = evaluate_combined_threshold(all_labels, all_combined_energies, thresholds_dict['init'])
     
     # 输出结果
-    print(f"\n使用各模型自带阈值的评估结果:")
+    print(f"\n使用验证集上最佳F1分数对应的阈值，在测试集上的评价结果:")
     print(f"准确率: {test_results['accuracy']:.2f}%")
     print(f"Precision: {test_results['precision_binary']:.4f}")
     print(f"Recall: {test_results['recall_binary']:.4f}")
     print(f"F1 Score: {test_results['f1_binary']:.4f}")
     
-    return test_results, val_results
+    return test_results
 
-
-# - - -
 
 def collect_model_predictions_with_mode(models, test_loader, grasp_file, device, mode="standard"):
     """收集能量模型的预测结果，支持不同模式
@@ -617,14 +622,24 @@ def collect_model_predictions_with_mode(models, test_loader, grasp_file, device,
         all_init_energies = np.concatenate(all_init_energies)
         all_goal_energies = np.concatenate(all_goal_energies)
 
-        # 全局标准化
-        init_energies_norm = (all_init_energies - np.mean(all_init_energies)) / (np.std(all_init_energies) + 1e-8)
-        goal_energies_norm = (all_goal_energies - np.mean(all_goal_energies)) / (np.std(all_goal_energies) + 1e-8)
+        # # 全局标准化
+        # init_energies_norm = (all_init_energies - np.mean(all_init_energies)) / (np.std(all_init_energies) + 1e-8)
+        # goal_energies_norm = (all_goal_energies - np.mean(all_goal_energies)) / (np.std(all_goal_energies) + 1e-8)
+        #
+        #
+        # print("mean :", np.mean(all_init_energies))
+        # print("std :", np.std(all_init_energies))
+        #
+        # mean = np.mean(all_init_energies)
+        # std = np.std(all_init_energies)
+        #
+        # # 合并结果
+        # all_energies_init = init_energies_norm
+        # all_energies_goal = goal_energies_norm
+        # all_combined_energies = init_energies_norm + goal_energies_norm
 
-        # 合并结果
-        all_energies_init = init_energies_norm
-        all_energies_goal = goal_energies_norm
-        all_combined_energies = init_energies_norm + goal_energies_norm
+        # 不进行标准化
+        all_combined_energies = all_init_energies + all_goal_energies
 
     elif mode == "extended":
         # 扩展模式处理
@@ -664,7 +679,7 @@ def evaluate_combined_threshold(all_labels, all_combined_energies, threshold):
         pred = np.zeros_like(labels)
         mask = energies.flatten() < threshold
         pred.flat[mask] = 1
-
+    
         y_true.append(labels)
         y_pred.append(pred)
 
@@ -689,7 +704,7 @@ def evaluate_combined_threshold(all_labels, all_combined_energies, threshold):
     }
 
 
-def optimal_f1_threshold(models, test_loader, grasp_file, device, mode="standard"):
+def optimal_f1_threshold(models, val_loader, grasp_file, device, mode="standard"):
     """直接计算最佳F1分数对应的阈值
     
     Args:
@@ -699,9 +714,10 @@ def optimal_f1_threshold(models, test_loader, grasp_file, device, mode="standard
         device: 计算设备
         mode: 评估模式
     """
+    
     # 收集模型预测
     all_labels, all_energies_init, all_energies_goal, all_combined_energies = collect_model_predictions_with_mode(
-        models, test_loader, grasp_file, device, mode)
+        models, val_loader, grasp_file, device, mode)
     
     # 计算精确率-召回率曲线
     # 注意：能量值越低表示越可能是正样本，所以需要取负值
@@ -746,11 +762,11 @@ def load_raw_data(data_path, ratio=0.5):
     return raw_data
 
 
-def split_data_indices(total_size, train_split, val_split):
+def split_data_indices(total_size, train_split, val_split, test_split):
     """划分数据集索引"""
     train_size = int(train_split * total_size)
     val_size = int(val_split * total_size)
-    test_size = total_size - train_size - val_size
+    test_size = int(test_split * total_size)
     
     indices = list(range(total_size))
     random.shuffle(indices)
@@ -758,20 +774,20 @@ def split_data_indices(total_size, train_split, val_split):
     return {
         'train': indices[:train_size],
         'val': indices[train_size:train_size+val_size],
-        'test': indices[train_size+val_size:]
+        'test': indices[train_size+val_size:train_size+val_size+test_size]
     }
 
 
 def create_datasets(raw_data, indices, args):
     # 创建训练集 - 利用init的数据（保证数据量一致）
-    train_dataset = SharedGraspEnergyDataset(
-        [raw_data[i] for i in indices['train']],
-        args.grasp_pickle_file,
-        use_quaternion=args.use_quaternion,
-        use_stable_label=args.use_stable_label,
-        grasp_type=args.grasp_type,
-        state_type='both'
-    )
+    # train_dataset = SharedGraspEnergyDataset(
+    #     [raw_data[i] for i in indices['train']],
+    #     args.grasp_pickle_file,
+    #     use_quaternion=args.use_quaternion,
+    #     use_stable_label=args.use_stable_label,
+    #     grasp_type=args.grasp_type,
+    #     state_type='both'
+    # )
 
     # 创建验证集和测试集
     val_dataset = SharedGraspEnergyDataset(
@@ -792,27 +808,27 @@ def create_datasets(raw_data, indices, args):
         state_type='both'
     )
     
-    return train_dataset, val_dataset, test_dataset
+    return  val_dataset, test_dataset
 
 
-def create_data_loaders(train_dataset, val_dataset, test_dataset, args):
+def create_data_loaders( val_dataset, test_dataset, args):
     """创建数据加载器"""
-    train_loader = DataLoader(
-        train_dataset,
-        shuffle=False,
-        batch_size=args.batch_size * 2,
-        num_workers=2,
-        pin_memory=True,
-        persistent_workers=True,  # 添加这个参数
-        prefetch_factor=2  # 添加这个参数
-    )
+    # train_loader = DataLoader(
+    #     train_dataset,
+    #     shuffle=False,
+    #     batch_size=args.batch_size * 2,
+    #     num_workers=2,
+    #     pin_memory=True,
+    #     persistent_workers=True,  # 添加这个参数
+    #     prefetch_factor=2  # 添加这个参数
+    # )
     
     # 验证和测试加载器类似修改
-   # val_sampler = BalancedBatchSampler(val_dataset, args.batch_size)
+    # val_sampler = BalancedBatchSampler(val_dataset, args.batch_size)
     val_loader = DataLoader(
         val_dataset, 
         shuffle=False,
-        batch_size=args.batch_size * 2,
+        batch_size=args.batch_size,
         num_workers=2,
         pin_memory=True,
         persistent_workers=True,
@@ -822,14 +838,14 @@ def create_data_loaders(train_dataset, val_dataset, test_dataset, args):
     test_loader = DataLoader(
         test_dataset,
         shuffle=False,
-        batch_size=args.batch_size * 2,  # 添加批量大小，与验证集保持一致
+        batch_size=args.batch_size,  # 添加批量大小，与验证集保持一致
         num_workers=2,
         pin_memory=True,
         persistent_workers=True,
         prefetch_factor=2
     )
     
-    return train_loader, val_loader, test_loader
+    return val_loader, test_loader
 
 
 def parse_args():
@@ -851,10 +867,10 @@ def parse_args():
     
     # 标准模式的模型路径
     parser.add_argument('--model_init_path', type=str, 
-                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\feasible_best_model\best_model_grasp_ebm_SharedGraspNetwork_bottle_experiment_data_352_h3_b2048_lr0.001_t0.5_r75000_s0.7_q1_sl1_grobot_table_stinit.pth',
+                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\feasible_best_model\best_model_grasp_ebm_SharedGraspNetwork_bottle_experiment_data_57_h3_b2048_lr0.001_t0.5_r75000_s0.7_q1_sl1_grobot_table_stinit.pth',
                        help='初始状态模型路径 (标准模式)')
     parser.add_argument('--model_goal_path', type=str, 
-                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\feasible_best_model\best_model_grasp_ebm_SharedGraspNetwork_bottle_experiment_data_352_h3_b2048_lr0.001_t0.5_r75000_s0.7_q1_sl1_grobot_table_stinit.pth',
+                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\feasible_best_model\best_model_grasp_ebm_SharedGraspNetwork_bottle_experiment_data_57_h3_b2048_lr0.001_t0.5_r75000_s0.7_q1_sl1_grobot_table_stinit.pth',
                        help='目标状态模型路径 (标准模式)')
     
     # 扩展模式的模型路径
@@ -870,15 +886,19 @@ def parse_args():
     parser.add_argument('--model_table_goal_path', type=str, 
                        default='E:/Qin/wrs/wrs/HuGroup_Qin/Shared_grasp_project/model/feasible_best_model/best_model_grasp_table_goal.pth',
                        help='table目标状态模型路径 (扩展模式)')
+    parser.add_argument('--seed', type = int, default=42)
     
+
     # 数据集参数
-    parser.add_argument('--train_split', type=float, default=0.7,
+    parser.add_argument('--train_split', type=float, default=0.0,
                        help='训练集比例')
-    parser.add_argument('--val_split', type=float, default=0.2,
+    parser.add_argument('--val_split', type=float, default=0.3,
                        help='验证集比例')
-    parser.add_argument('--batch_size', type=int, default=32,
+    parser.add_argument('--test_split', type=float, default=0.3,
+                       help='测试集比例')
+    parser.add_argument('--batch_size', type=int, default=1024,
                        help='批量大小')
-    parser.add_argument('--data_ratio', type=float, default=0.70,
+    parser.add_argument('--data_ratio', type=float, default=0.30,
                        help='数据比例')
     parser.add_argument('--use_quaternion', type=int, default=1,
                        help='使用四元数 (1) 或欧拉角 (0)')
@@ -888,6 +908,7 @@ def parse_args():
     parser.add_argument('--grasp_type', type=str, default='robot_table',
                        choices=['robot_table', 'table', 'robot'],
                        help='使用哪种抓取类型')
+    
     
     # 模型参数
     parser.add_argument('--input_dim', type=int, default=19)
@@ -911,21 +932,22 @@ if __name__ == '__main__':
     # 解析命令行参数
     args = parse_args()
 
+    random.seed(args.seed)
     # 加载原始数据
     raw_data = load_raw_data(args.test_dataset, args.data_ratio)
 
-    indices = split_data_indices(len(raw_data), args.train_split, args.val_split)
+    indices = split_data_indices(len(raw_data), args.train_split, args.val_split, args.test_split)
     
     # 创建数据集
-    train_dataset, val_dataset, test_dataset = create_datasets(raw_data, indices, args)
+    val_dataset, test_dataset = create_datasets(raw_data, indices, args)
     
     # 及时清理原始数据
     del raw_data, indices
     gc.collect()
     
     # 创建数据加载器
-    train_loader, val_loader, test_loader = create_data_loaders(
-        train_dataset, val_dataset, test_dataset, args
+    val_loader, test_loader = create_data_loaders(
+    val_dataset, test_dataset, args
     )
 
     # 设置输入维度 - 检查与训练时是否一致
@@ -1010,30 +1032,28 @@ if __name__ == '__main__':
     # 添加阈值信息到wandb配置
     # wandb.config.update({"thresholds": thresholds_dict})
 
+    # 使用自带阈值评估模型 - 不进行归一化：
+    test_results = evaluate_with_model_thresholds(
+        models, test_loader, args.grasp_pickle_file,
+          device, thresholds_dict, mode=args.model_mode
+    )
+
+
     # 使用固定阈值评估模型
-    # test_results, val_results = test_AND_model_with_fixed_thresholds(
+    # test_results = test_AND_model_with_fixed_thresholds(
     #     models, test_loader, val_loader, args.grasp_pickle_file, device, thresholds_dict, mode=args.model_mode
     # )
 
     # 在val上最佳数据集后，在test上测试
     best_results, best_threshold, best_f1 = optimal_f1_threshold(models, val_loader, args.grasp_pickle_file, device, args.model_mode )
-    print("\n best_results : ", best_results)
+    # print("\n best_results : ", best_results)
     print("\n best_threshold :", best_threshold)
-    print("\n best_f1:", best_f1)
+    # print("\n best_f1:", best_f1)
 
     thresholds_dict['init'] = best_threshold
     thresholds_dict['goal'] = best_threshold
-    test_results, val_results = test_AND_model_with_fixed_thresholds(
+    test_results = test_AND_model_with_fixed_thresholds(
         models, test_loader, val_loader, args.grasp_pickle_file, device, thresholds_dict, mode=args.model_mode
     )
 
-    # 检查数据集分布
-    def check_dataset_distribution(dataset, name):
-        labels = [label.item() for _, label in dataset]
-        positive_ratio = sum(labels) / len(labels)
-        print(f"{name} 数据集: 总样本 {len(labels)}, 正样本比例 {positive_ratio:.4f}")
-
-    check_dataset_distribution(train_dataset, "训练")
-    check_dataset_distribution(val_dataset, "验证")
-    check_dataset_distribution(test_dataset, "测试")
 

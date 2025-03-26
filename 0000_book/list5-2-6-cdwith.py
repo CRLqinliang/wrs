@@ -5,7 +5,7 @@ import wrs.visualization.panda.world as wd
 if __name__ == '__main__':
     base = wd.World(cam_pos=np.array([.7, .05, .3]), lookat_pos=np.zeros(3))
     # object
-    object_ref = mcm.CollisionModel(initor="./objects/bunnysim.stl",
+    object_ref = mcm.CollisionModel(initor="./objects/Bunnysim.stl",
                                     cdprim_type=mcm.mc.CDPrimType.AABB,
                                     cdmesh_type=mcm.mc.CDMeshType.DEFAULT)
     object_ref.rgba = np.array([.9, .75, .35, 1])

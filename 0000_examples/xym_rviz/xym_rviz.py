@@ -19,7 +19,7 @@ if __name__ == '__main__':
                                   [0, .7, 0, .3],  # rgba
                                   'auto']  # name
     # define object and object anime info
-    objfile = os.path.join(basis.__path__[0], 'objects', 'bunnysim.stl')
+    objfile = os.path.join(basis.__path__[0], 'objects', 'Bunnysim.stl')
     obj = cm.CollisionModel(objfile)
     obj_parameters = [[.3, .2, .1, 1]]  # rgba
     obj_path = [[np.array([.85, 0, .17]), np.eye(3)]]  # [pos, rotmat]

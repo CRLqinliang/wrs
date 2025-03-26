@@ -143,7 +143,7 @@ if __name__ == '__main__':
 
     wd.World(cam_pos=[1.0, 1, .0, 1.0], lookat_pos=[0, 0, 0])
     mgm.gen_frame().attach_to(base)
-    objpath = os.path.join(os.path.dirname(rm.__file__), 'objects', 'bunnysim.stl')
+    objpath = os.path.join(os.path.dirname(rm.__file__), 'objects', 'Bunnysim.stl')
     objcm1 = mcm.CollisionModel(objpath)
     homomat = np.eye(4)
     homomat[:3, :3] = rm.rotmat_from_axangle([0, 0, 1], math.pi / 2)

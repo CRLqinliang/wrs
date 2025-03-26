@@ -160,7 +160,7 @@ if __name__ == '__main__':
     pr = profile.Profile()
     pr.disable()
     base = wd.World(cam_pos=[.3, .3, .3], lookat_pos=[0, 0, 0], toggle_debug=True)
-    obj_path = os.path.join(os.path.dirname(rm.__file__), 'objects', 'bunnysim.stl')
+    obj_path = os.path.join(os.path.dirname(rm.__file__), 'objects', 'Bunnysim.stl')
     bunny_cm = mcm.CollisionModel(obj_path)
     pr.enable()
     facet_nested_face_id_list, seg_nested_edge_list, facet_seed_list, facet_normal_list, facet_curvature_list, face_id_pair_list_for_curvature = overlapped_segmentation(

@@ -168,28 +168,25 @@ def compare_multiple_distributions(file_numbers):
 # TODO modify the detail.
 if __name__ == '__main__':
     # grasp data
-    # grasp_data_path = r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\bottle_grasp_352.pickle"
-    # object_feasible_grasps = grasp_load(grasp_data_path)
-    # gripper = wrs_gripper_v3.WRSGripper3()
-    # # show_grasp(gripper, object_feasible_grasps)
-    # id_dim = len(object_feasible_grasps)
+    grasp_data_path = r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\bottle_grasp_352.pickle"
+    object_feasible_grasps = grasp_load(grasp_data_path)
+    id_dim = len(object_feasible_grasps)
 
     # common grasp data
-    common_grasp_data_path = r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\SharedGraspNetwork_bottle_table_experiment_data_57.pickle"
+    common_grasp_data_path = r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\SharedGraspNetwork_bottle_experiment_data_final_352.pickle"
     common_grasp_data = grasp_load(common_grasp_data_path)
 
 
+    # create target vectors
+    target_vector_set = []
+    for common_grasp_data_index in range(len(common_grasp_data)):
+        common_grasp_data_item = common_grasp_data[common_grasp_data_index]
+        target_vector_set.append(create_target_vector(id_dim, common_grasp_data_item[-1]))
 
-    # # create target vectors
-    # target_vector_set = []
-    # for common_grasp_data_index in range(len(common_grasp_data)):
-    #     common_grasp_data_item = common_grasp_data[common_grasp_data_index]
-    #     target_vector_set.append(create_target_vector(id_dim, common_grasp_data_item[-1]))
-
-    # result = analyze_ones_distribution(target_vector_set)
+    result = analyze_ones_distribution(target_vector_set)
 
     # # 查看分析结果
-    # print("总 1 的数量：", result["total_ones"])
+    print("总 1 的数量：", result["total_ones"])
     # print("1 的总体比例：", result["ones_proportion"])
     # print("每行平均 1 的数量：", result["average_ones_per_row"])
     # print("每行 1 的中位数：", result["median_ones_per_row"])

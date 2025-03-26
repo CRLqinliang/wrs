@@ -6,7 +6,7 @@ mgm.gen_frame().attach_to(base)
 # object_box = mcm.gen_box(xyz_lengths=[.02, .06, 1])
 # object_box.set_rgba([.7, .5, .3, .7])
 # object_box.attach_to(base)
-object_bunny = mcm.CollisionModel("objects/bunnysim.stl")
+object_bunny = mcm.CollisionModel("objects/Bunnysim.stl")
 object_bunny.rgba = rm.vec(.9, .75, .35, 1)
 object_bunny.attach_to(base)
 # grippers

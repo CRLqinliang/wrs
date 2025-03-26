@@ -94,10 +94,10 @@ if __name__ == '__main__':
 
     current_jnv = np.array([-105.7156, -5.8495, 107.7660, -14.8353, -96.9777, -3.9212]) * np.pi / 180
     robot.goto_given_conf(jnt_values=current_jnv)
-    robot.gen_meshmodel(alpha=.5, toggle_tcp_frame=True, toggle_jnt_frames=False).attach_to(base)
+    # robot.gen_meshmodel(alpha=.5, toggle_tcp_frame=True, toggle_jnt_frames=False).attach_to(base)
     robot.gen_stickmodel(toggle_tcp_frame=True, toggle_jnt_frames=True).attach_to(base)
-    robot.show_cdprim()
-    robot.unshow_cdprim()
+    # robot.show_cdprim()
+    # robot.unshow_cdprim()
     base.run()
     
     cur_pos, cur_rotmat = robot.fk(current_jnv)

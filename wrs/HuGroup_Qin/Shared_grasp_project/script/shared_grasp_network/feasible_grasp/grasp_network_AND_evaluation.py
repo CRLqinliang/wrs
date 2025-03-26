@@ -198,8 +198,8 @@ class SharedGraspBinaryDataset(Dataset):
                 all_features[current_idx:end_idx, feature_start:feature_start+len(init_obj_pose)] = init_obj_pose
                 feature_start += len(init_obj_pose)
                 
-                    
-                # 如果使用stable_label，添加初始状态的One-Hot编码
+                
+                    # 如果使用stable_label，添加初始状态的One-Hot编码
                 if self.use_stable_label:
                     init_stable_onehot = self.obj_encoder.transform([[init_stable_id]]).copy()
                     all_features[current_idx:end_idx, feature_start:feature_start+onehot_dim] = init_stable_onehot
@@ -407,7 +407,7 @@ def collect_model_predictions_with_mode(models, test_loader, device, mode="stand
 
 
 def test_AND_model_with_dataset(models, test_loader, device, thresholds=None, mode="standard", 
-                                verbose=True, model_thresholds=None):
+                                verbose=False, model_thresholds=None):
     """在测试集上评估模型
     
     Args:
@@ -540,7 +540,7 @@ def split_data_indices(data_len, train_split=0.7, val_split=0.15, seed=42):
 
 
 def find_optimal_threshold_with_pr_curve(models, val_loader, device, mode="standard"):
-    """使用PR曲线寻找最佳F1分数对应的阈值
+    """使用PR曲线寻找合并预测后F1分数最大的共同阈值
     
     Args:
         models: 模型字典
@@ -549,7 +549,7 @@ def find_optimal_threshold_with_pr_curve(models, val_loader, device, mode="stand
         mode: 评估模式，"standard"(两个模型) 或 "extended"(四个模型)
     
     Returns:
-        dict: 每个模型的最佳阈值
+        dict 或 float: 如果是standard模式返回单一阈值，extended模式返回阈值字典
     """
     from sklearn.metrics import precision_recall_curve, f1_score
     
@@ -610,34 +610,63 @@ def find_optimal_threshold_with_pr_curve(models, val_loader, device, mode="stand
     for model_name in model_predictions:
         model_predictions[model_name] = np.concatenate(model_predictions[model_name])
     
-    # 为每个模型寻找最佳阈值
-    optimal_thresholds = {}
-    
-    for model_name, predictions in model_predictions.items():
-        # 使用PR曲线寻找最佳阈值
-        precision, recall, thresholds = precision_recall_curve(all_labels, predictions)
+    if mode == "standard":
+        # 标准模式：为两个模型找一个共同的最佳阈值
+        # 创建一个阈值列表进行搜索
+        thresholds = np.linspace(0.01, 0.99, 99)  # 从0.01到0.99的99个阈值点
+        best_f1 = 0
+        best_threshold = 0.5  # 默认阈值
         
-        # 计算每个阈值对应的F1分数
-        # 注意：precision_recall_curve返回的thresholds比precision和recall少一个元素
-        # 所以我们需要在thresholds末尾添加一个0，以匹配precision和recall的长度
-        thresholds = np.append(thresholds, 0)
+        # 对每个阈值计算合并后的F1分数
+        for threshold in thresholds:
+            # 使用当前阈值对两个模型的预测进行二值化
+            init_binary = (model_predictions['init'] >= threshold).astype(float)
+            goal_binary = (model_predictions['goal'] >= threshold).astype(float)
+            
+            # 合并预测结果（AND操作）
+            combined_binary = np.minimum(init_binary, goal_binary)
+            
+            # 计算F1分数
+            current_f1 = f1_score(all_labels, combined_binary, average='binary', zero_division=0)
+            
+            # 更新最佳阈值
+            if current_f1 > best_f1:
+                best_f1 = current_f1
+                best_threshold = threshold
         
-        # 计算F1分数 (2 * precision * recall) / (precision + recall)
-        # 避免除零错误
-        f1_scores = np.zeros_like(precision)
-        valid_indices = (precision + recall) > 0
-        f1_scores[valid_indices] = 2 * (precision[valid_indices] * recall[valid_indices]) / (precision[valid_indices] + recall[valid_indices])
+        print(f"找到的共同最佳阈值: {best_threshold:.4f}, F1分数: {best_f1:.4f}")
         
-        # 找到最大F1分数对应的索引
-        best_idx = np.argmax(f1_scores)
-        best_threshold = thresholds[best_idx]
-        best_f1 = f1_scores[best_idx]
+        # 对于标准模式，返回单一阈值
+        return best_threshold
         
-        optimal_thresholds[model_name] = best_threshold
-        print(f"模型 {model_name} 的最佳阈值: {best_threshold:.4f}, F1分数: {best_f1:.4f}")
+    elif mode == "extended":
+        # 扩展模式：仍然为每个模型单独找最佳阈值
+        optimal_thresholds = {}
         
-
-    return optimal_thresholds
+        for model_name, predictions in model_predictions.items():
+            # 使用PR曲线寻找最佳阈值
+            precision, recall, thresholds = precision_recall_curve(all_labels, predictions)
+            
+            # 计算每个阈值对应的F1分数
+            # 注意：precision_recall_curve返回的thresholds比precision和recall少一个元素
+            # 所以我们需要在thresholds末尾添加一个0，以匹配precision和recall的长度
+            thresholds = np.append(thresholds, 0)
+            
+            # 计算F1分数 (2 * precision * recall) / (precision + recall)
+            # 避免除零错误
+            f1_scores = np.zeros_like(precision)
+            valid_indices = (precision + recall) > 0
+            f1_scores[valid_indices] = 2 * (precision[valid_indices] * recall[valid_indices]) / (precision[valid_indices] + recall[valid_indices])
+            
+            # 找到最大F1分数对应的索引
+            best_idx = np.argmax(f1_scores)
+            best_threshold = thresholds[best_idx]
+            best_f1 = f1_scores[best_idx]
+            
+            optimal_thresholds[model_name] = best_threshold
+            print(f"模型 {model_name} 的最佳阈值: {best_threshold:.4f}, F1分数: {best_f1:.4f}")
+        
+        return optimal_thresholds
 
 
 def test_AND_model_with_optimal_threshold(models, val_loader, test_loader, device, mode="standard", verbose=True):
@@ -652,21 +681,30 @@ def test_AND_model_with_optimal_threshold(models, val_loader, test_loader, devic
         verbose: 是否输出详细信息
     
     Returns:
-        tuple: (最佳阈值字典, 评估结果, 详细结果)
+        tuple: (最佳阈值字典或单一阈值, 评估结果, 详细结果)
     """
     # 在验证集上寻找最佳阈值
     print("\n在验证集上寻找最佳阈值...")
-    optimal_thresholds = find_optimal_threshold_with_pr_curve(models, val_loader, device, mode)
+    optimal_threshold = find_optimal_threshold_with_pr_curve(models, val_loader, device, mode)
     
     # 在测试集上使用最佳阈值评估模型
     print("\n使用最佳阈值在测试集上评估模型...")
+    
+    # 根据模式处理阈值
+    if mode == "standard" and not isinstance(optimal_threshold, dict):
+        # 标准模式下，将单一阈值转换为字典格式
+        model_thresholds = {'init': optimal_threshold, 'goal': optimal_threshold}
+    else:
+        # 扩展模式或已经是字典格式
+        model_thresholds = optimal_threshold
+    
     _, best_results, threshold_results = test_AND_model_with_dataset(
-        models, test_loader, device, mode=mode, model_thresholds=optimal_thresholds
+        models, test_loader, device, mode=mode, model_thresholds=model_thresholds
     )
     
     # 输出结果
     print("\n使用验证集优化阈值的测试结果:")
-    print(f"最佳阈值: {optimal_thresholds}")
+    print(f"最佳阈值: {optimal_threshold}")
     print(f"准确率: {best_results['accuracy']:.2f}%")
     print(f"Binary_Precision: {best_results['binary_precision']:.4f}")
     print(f"Binary_Recall: {best_results['binary_recall']:.4f}")
@@ -697,10 +735,10 @@ def test_AND_model_with_optimal_threshold(models, val_loader, test_loader, devic
                 "optimal_recall": best_results['binary_recall'], 
                 "optimal_accuracy": best_results['accuracy'],
                 "optimal_confusion_matrix": wandb.Image(plt_path),
-                "optimal_thresholds": optimal_thresholds
+                "optimal_threshold": optimal_threshold
             })
     
-    return optimal_thresholds, best_results, threshold_results
+    return optimal_threshold, best_results, threshold_results
 
 
 def parse_args():
@@ -718,7 +756,6 @@ def parse_args():
                         choices=['standard', 'extended'],
                         help='模型评估模式: standard(两个模型) 或 extended(四个模型)')
     
-    # 标准模式的模型路径
     parser.add_argument('--model_init_path', type=str, default=r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\feasible_best_model\best_model_grasp_BC_SharedGraspNetwork_bottle_experiment_data_352_h3_b2048_lr0.001_r75000_s0.7_q1_sl1_seed42.pth",
                         help='初始状态模型路径 (标准模式)')
     parser.add_argument('--model_goal_path', type=str, default=r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\feasible_best_model\best_model_grasp_BC_SharedGraspNetwork_bottle_experiment_data_352_h3_b2048_lr0.001_r75000_s0.7_q1_sl1_seed42.pth",
@@ -755,7 +792,7 @@ def parse_args():
                         help='使用哪种状态类型')
     
     # 模型参数
-    parser.add_argument('--input_dim', type=int, default=6,
+    parser.add_argument('--input_dim', type=int, default=19,
                         help='输入维度')
     parser.add_argument('--hidden_dims', nargs='+', type=int, default=[512, 512, 512],
                         help='隐藏层维度')
@@ -778,7 +815,7 @@ def parse_args():
     
     
     # 新增：使用验证集优化阈值
-    parser.add_argument('--use_optimal_threshold', type=bool, default=False,
+    parser.add_argument('--use_optimal_threshold', type=bool, default=True,
                        help='使用验证集优化阈值')
     
     args = parser.parse_args()
@@ -1041,23 +1078,34 @@ def main():
     # 根据是否使用验证集优化阈值选择评估方法
     if args.use_optimal_threshold:
         # 使用验证集优化阈值
-        optimal_thresholds, best_results, threshold_results = test_AND_model_with_optimal_threshold(
+        optimal_threshold, best_results, threshold_results = test_AND_model_with_optimal_threshold(
             models, val_loader, test_loader, device, mode=args.model_mode
         )
         
         # 记录最终结果
         if not args.no_wandb:
-            wandb.log({
-                "final_optimal_thresholds": optimal_thresholds,
-                "final_accuracy": best_results['accuracy'],
-                "final_precision": best_results['binary_precision'],
-                "final_recall": best_results['binary_recall'],
-                "final_f1": best_results['binary_f1']
-            })
+            if args.model_mode == "standard" and not isinstance(optimal_threshold, dict):
+                # 标准模式下记录单一阈值
+                wandb.log({
+                    "final_optimal_threshold": optimal_threshold,
+                    "final_accuracy": best_results['accuracy'],
+                    "final_precision": best_results['binary_precision'],
+                    "final_recall": best_results['binary_recall'],
+                    "final_f1": best_results['binary_f1']
+                })
+            else:
+                # 扩展模式下记录阈值字典
+                wandb.log({
+                    "final_optimal_thresholds": optimal_threshold,
+                    "final_accuracy": best_results['accuracy'],
+                    "final_precision": best_results['binary_precision'],
+                    "final_recall": best_results['binary_recall'],
+                    "final_f1": best_results['binary_f1']
+                })
         
         # 将结果保存到文件
         results_summary = {
-            'optimal_thresholds': optimal_thresholds,
+            'optimal_threshold': optimal_threshold,
             'best_results': best_results,
             'threshold_results': threshold_results,
             'config': vars(args)

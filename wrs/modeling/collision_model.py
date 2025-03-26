@@ -520,7 +520,7 @@ if __name__ == "__main__":
     box = gen_stick(spos=np.array([0, 0, -1]), epos=np.array([1, 0, 0]), radius=.1)
     box.attach_to(base)
     box.show_cdprim()
-    objpath = os.path.join(os.path.dirname(rm.__file__), "objects", "bunnysim.stl")
+    objpath = os.path.join(os.path.dirname(rm.__file__), "objects", "Bunnysim.stl")
     bunnycm = CollisionModel(objpath, cdprim_type=const.CDPrimType.CAPSULE)
     bunnycm.rgba = rm.np.array([0.7, 0.7, 0.0, .2])
     bunnycm.show_local_frame()

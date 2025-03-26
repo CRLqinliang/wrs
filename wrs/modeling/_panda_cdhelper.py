@@ -480,7 +480,7 @@ if __name__ == '__main__':
     import wrs.visualization.panda.world as wd
 
     base = wd.World(cam_pos=[.7, .7, .7], lookat_pos=[0, 0, 0])
-    file_path = os.path.join(basis.__path__[0], 'objects', 'bunnysim.stl')
+    file_path = os.path.join(basis.__path__[0], 'objects', 'Bunnysim.stl')
     cmodel = mcm.CollisionModel(file_path, cdprim_type=mc.CDPrimType.CYLINDER)
     cmodel.rgba = np.array([.2, .5, 0, 1])
     cmodel.pos = np.array([.1, .01, .01])

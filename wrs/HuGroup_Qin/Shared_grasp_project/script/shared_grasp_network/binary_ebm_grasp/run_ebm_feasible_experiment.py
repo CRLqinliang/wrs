@@ -7,7 +7,7 @@ import torch
 
 def run_ebm_experiment(hidden_dims, num_layers, dropout_rate, batch_size, 
                       learning_rate, temperature, dataset_type, data_id, 
-                      train_split, data_range, seed, use_quaternion,
+                      train_split, data_ratio, seed, use_quaternion,
                       use_stable_label, grasp_type, state_type):
     """运行单个EBM实验"""
     # 获取当前文件的目录路径
@@ -16,13 +16,13 @@ def run_ebm_experiment(hidden_dims, num_layers, dropout_rate, batch_size,
     
     # 数据路径
     data_path = os.path.join(f'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project',
-        f'grasps/Bottle/{dataset_type}_{data_id}.pickle')
+        f'grasps/Power_drill/{dataset_type}_{data_id}.pickle')
 
     grasp_data_path = os.path.join(f'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project',
-        f'grasps/Bottle/bottle_grasp_{data_id}.pickle')
+        f'grasps/Power_drill/power_drill_grasp_{data_id}.pickle')
     
     # 构建模型保存路径
-    exp_name = f'ebm_{dataset_type}_{data_id}_h{len(hidden_dims)}_b{batch_size}_lr{learning_rate}_t{temperature}_r{data_range}_s{train_split}_q{int(use_quaternion)}_sl{int(use_stable_label)}_g{grasp_type}_st{state_type}'
+    exp_name = f'ebm_{dataset_type}_{data_id}_h{len(hidden_dims)}_b{batch_size}_lr{learning_rate}_t{temperature}_r{data_ratio}_s{train_split}_q{int(use_quaternion)}_sl{int(use_stable_label)}_g{grasp_type}_st{state_type}'
     model_save_path = os.path.join(f'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project',
                                    f'model/feasible_best_model/best_model_grasp_{exp_name}.pth')
     
@@ -40,10 +40,10 @@ def run_ebm_experiment(hidden_dims, num_layers, dropout_rate, batch_size,
         '--learning_rate', str(learning_rate),
         '--weight_decay', '1e-4',
         '--temperature', str(temperature),           
-        '--num_epochs', '80',
+        '--num_epochs', '100',
         '--early_stop_patience', '10',
         '--train_split', str(train_split),
-        '--data_range', str(data_range),
+        '--data_ratio', str(data_ratio),
         '--seed', str(seed),
         '--use_quaternion', '1' if use_quaternion else '0',
         '--use_stable_label', '1' if use_stable_label else '0',
@@ -71,22 +71,22 @@ def main():
             'hidden_dims': [512, 512, 512],
             'num_layers': 3,
             'dropout_rate': 0.1,
-            'batch_size': 2048,
+            'batch_size': 1024,
             'learning_rate': 1e-3,
             'temperature': 0.5,
             'use_quaternion': True,
             'use_stable_label': True,
-            'grasp_type': 'table',
+            'grasp_type': 'robot_table',
             'state_type': 'init' # 使用init保证数据量一致
         }
     ]
     
-    dataset_types = ["SharedGraspNetwork_bottle_table_experiment_data"]
-    dataset_ids = [57]
+    dataset_types = ["SharedGraspNetwork_power_drill_experiment_data_final"]
+    dataset_ids = [199]
     seeds = [22]
     train_splits = [0.7] 
-    # data_ratio = [0.3, 0.6, 0.9, 0.95, 0.99]
-    data_range = [70000, 28000, 14000, 2800]
+    data_ratio = [0]
+    #data_range = [70000, 28000, 14000, 2800]
     
     # 运行所有实验组合
     for config in experiment_configs:
@@ -98,7 +98,7 @@ def main():
                     torch.cuda.empty_cache()
                 for train_split in train_splits:
                     for seed in seeds:
-                        for num in data_range:
+                        for num in data_ratio:
                             run_ebm_experiment(
                                 hidden_dims=config['hidden_dims'],
                                 num_layers=config['num_layers'],
@@ -109,7 +109,7 @@ def main():
                                 dataset_type=dataset_type,
                                 data_id=data_id,
                                 train_split=train_split,
-                                data_range = num,
+                                data_ratio = num,
                                 seed=seed,
                                 use_quaternion=config['use_quaternion'],
                                 use_stable_label=config['use_stable_label'],

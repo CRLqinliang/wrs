@@ -77,6 +77,10 @@ class Data(object):
         self.counter = 0
         self.mesh_model_list = mesh_model_list
 
+ev_list = result.ev_list
+jnv_list = result.jv_list
+np.save("./ev_list.pickle", ev_list)
+np.save("./jnv_list.pickle", jnv_list)
 
 anime_data = Data(mesh_model_list=result.mesh_list)
 

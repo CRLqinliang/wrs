@@ -14,7 +14,7 @@ class Data(object):
 base = wd.World(cam_pos=[3, 2, 3], lookat_pos=[0.5, 0, 1.1])
 gm.gen_frame().attach_to(base)
 # object
-object = cm.CollisionModel("objects/bunnysim.stl")
+object = cm.CollisionModel("objects/Bunnysim.stl")
 object.pos = np.array([.75, .2, 1.3])
 object.rgba = np.array([.5, .7, .3, 1])
 object.attach_to(base)

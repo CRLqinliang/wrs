@@ -5,7 +5,7 @@ import wrs.modeling.dynamics.bullet.bdmodel as bdm
 # base = wd.World(cam_pos=[1000, 300, 1000], lookat_pos=[0, 0, 0], toggle_dbg=True)
 base = wd.World(cam_pos=[.3, .3, 1], lookat_pos=[0, 0, 0], toggle_debug=False)
 base.setFrameRateMeter(True)
-obj_path = os.path.join(os.path.dirname(rm.__file__), "objects", "bunnysim.stl")
+obj_path = os.path.join(os.path.dirname(rm.__file__), "objects", "Bunnysim.stl")
 # obj_path = os.path.join(basis.__path__[0], "objects", "block.stl")
 bunnycm = bdm.BDModel(obj_path, mass=1, type="box")
 

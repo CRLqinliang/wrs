@@ -6,4 +6,4 @@ if __name__ == '__main__':
     author: weiwei
     date: 20201207osaka
     '''
-    mt.convert_to_stl("bunnysim.stl", "bunnysim_mm.stl", scale_ratio=np.ones(3)*1000)
+    mt.convert_to_stl("Bunnysim.stl", "bunnysim_mm.stl", scale_ratio=np.ones(3)*1000)

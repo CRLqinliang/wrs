@@ -1,7 +1,7 @@
 from wrs import wd, rm, mgm
 
 base = wd.World(cam_pos=rm.np.array([2, .0,.5]), lookat_pos=rm.np.zeros(3))
-bunny = mgm.GeometricModel(initor="objects/bunnysim.stl")
+bunny = mgm.GeometricModel(initor="objects/Bunnysim.stl")
 bunny.alpha=.3
 start_pos = rm.np.array([0, 0.3, 0])
 start_rotmat = rm.np.eye(3)

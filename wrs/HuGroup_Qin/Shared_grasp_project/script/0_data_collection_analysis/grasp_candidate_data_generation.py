@@ -37,7 +37,6 @@ def grasp_save(path, data):
 
 
 def fs_reference_poses_collection(gripper, obj_cmodel):
-    # TODO: 需要修改
     fs_reference_poses = FSReferencePoses(obj_cmodel=obj_cmodel)
     grasp_collection_set = []
     for pose in fs_reference_poses:
@@ -205,15 +204,25 @@ if __name__ == '__main__':
         # mgm.gen_frame().attach_to(base)
 
         # 对象配置
-        # obj_path = r"H:\Qin\wrs\wrs\bench_mark\ycb\power_drill.stl"  # 使用相对路径
+        # obj_path = r"E:\Qin\wrs\wrs\bench_mark\ycb\power_drill.stl"  # 使用相对路径
         obj_path = r"E:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\bottle.stl"
-        # obj_path = r"H:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\mug.stl"
+        # obj_path = r"E:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\mug.stl"
         # obj_path = r"H:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\bracketR1.stl"
         # table_path = r"H:\Qin\wrs\wrs\HuGroup_Qin\robot_sim\meshes\regrasp_table_env.stl"
         # obj_path = r"H:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\tubebig.stl"
+        # obj_path = r"E:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\bunnysim.stl"
         
         obj_cmodel = mcm.CollisionModel(initor=obj_path, rgb=rm.const.white)
-        obj_cmodel.attach_to(base)
+        fs_poses = FSReferencePoses(obj_cmodel=obj_cmodel)
+        # for index, pose in enumerate(fs_poses):
+        #     pose[0][1] = 0
+        #     obj_cmodel.pos = pose[0] + np.array([index ,0 ,0]) * 0.2
+        #     obj_cmodel.rotmat = pose[1]
+        #     obj_cmodel_copy = obj_cmodel.copy()
+        #     obj_cmodel_copy.show_local_frame()
+        #     obj_cmodel_copy.attach_to(base)
+        # base.run()
+
         # base.run()
         if obj_cmodel is None:
             raise ValueError("无法加载物体模型")
@@ -221,33 +230,31 @@ if __name__ == '__main__':
         # 抓取规划
         gripper = wrs_gripper_v3.WRSGripper3()
 
-        # 分析所有物体
-        # analyze_all_objects()
-
 
         # generate grasp data
         grasp_collection_set = gpa.plan_gripper_grasps(
             gripper,
             obj_cmodel,
             angle_between_contact_normals=rm.np.radians(160),
-            rotation_interval=rm.np.radians(180),
-            max_samples=20
+            rotation_interval=rm.np.radians(60),
+            max_samples=260
         )
         
         # 显示抓取集合
         print(len(grasp_collection_set))
-        # grasp_collection_set.save_to_disk(file_name=r'H:\Qin\wrs\wrs\HuGroup_Qin\data\grasps\Power_drill\power_drill{}.pickle'.format(len(grasp_collection_set)))
-        # grasp_collection_set.save_to_disk(r"H:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle_round\bottle_ground_grasp_{}.pickle".format(len(grasp_collection_set)))
-        # grasp_collection_set.save_to_disk(r"H:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Power_drill\power_drill_grasp_{}.pickle".format(len(grasp_collection_set)))
-        # grasp_collection_set.save_to_disk(r"H:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\tube_big\tube_big_grasp_{}.pickle".format(len(grasp_collection_set)))
-        grasp_collection_set = grasp_load(r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\bottle_grasp_57.pickle")
+        # grasp_collection_set.save_to_disk(r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Power_drill\power_drill_grasp_{}.pickle".format(len(grasp_collection_set)))
+        grasp_collection_set.save_to_disk(
+            r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\bottle_grasp_{}.pickle".format(
+                len(grasp_collection_set)))
 
-        # for grasp in grasp_collection_set:
-        grasp = grasp_collection_set.__getitem__(0)
-        gripper.grip_at_by_pose(jaw_center_pos=grasp.ac_pos,
-                                jaw_center_rotmat=grasp.ac_rotmat,
-                                jaw_width=grasp.ee_values)
-        gripper.gen_meshmodel(alpha=1).attach_to(base)
+        # grasp_collection_set = grasp_load(r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Power_drill\power_drill_grasp_321.pickle")
+
+        for index, grasp in enumerate(grasp_collection_set):
+       # grasp = grasp_collection_set.__getitem__(0)
+            gripper.grip_at_by_pose(jaw_center_pos=grasp.ac_pos,
+                                    jaw_center_rotmat=grasp.ac_rotmat,
+                                    jaw_width=grasp.ee_values)
+            gripper.gen_meshmodel(alpha=.8).attach_to(base)
         base.run()
         
     except Exception as e:

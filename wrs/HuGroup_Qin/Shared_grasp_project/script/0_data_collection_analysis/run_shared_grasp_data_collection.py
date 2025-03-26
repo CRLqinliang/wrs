@@ -33,7 +33,7 @@ def run_shared_grasp_data_collection(grasp_ids=[109], total_iterations=int(1e4),
             p = psutil.Process(process.pid)
             p.nice(psutil.HIGH_PRIORITY_CLASS)  # Windows下相当于"高于标准"优先级
         except Exception as e:
-            print(f"设置进程优先级时出错: {e}")
+            print(f"warning : {e}")
         
         # 等待进程完成
         process.wait()
@@ -41,10 +41,10 @@ def run_shared_grasp_data_collection(grasp_ids=[109], total_iterations=int(1e4),
 
 def parse_args():
     parser = argparse.ArgumentParser(description='运行共享抓取数据收集')
-    parser.add_argument('--runs', type=int, default=13, help='运行次数')  # 0.3M  - Shared grasp 0.3M , feasible grasp 0.6M.
-    parser.add_argument('--grasp_ids', type=int, nargs='+', default=[57], help='要处理的抓取ID列表')
+    parser.add_argument('--runs', type=int, default=17, help='运行次数')  # 0.3M  - Shared grasp 0.3M , feasible grasp 0.6M.
+    parser.add_argument('--grasp_ids', type=int, nargs='+', default=[199], help='要处理的抓取ID列表')
     parser.add_argument('--total_iterations', type=int, default=int(1e4), help='每次运行的总迭代次数')
-    parser.add_argument('--save_batch_size', type=int, default=1000, help='每批保存的数据大小')
+    parser.add_argument('--save_batch_size', type=int, default=500, help='每批保存的数据大小')
     return parser.parse_args()
 
 if __name__ == '__main__':

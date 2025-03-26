@@ -2,7 +2,7 @@ from wrs import wd, rm, rtq85, mcm, gag
 
 base = wd.World(cam_pos=[.5, .5, .3], lookat_pos=[0, 0, 0])
 gripper = rtq85.Robotiq85()
-obj_cm = mcm.CollisionModel("./objects/bunnysim.stl")
+obj_cm = mcm.CollisionModel("./objects/Bunnysim.stl")
 obj_cm.pos = rm.vec(.0, -.0065, -0.012)
 obj_cm.attach_to(base)
 obj_cm.show_local_frame()

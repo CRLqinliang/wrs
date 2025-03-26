@@ -33,9 +33,9 @@ import torch  # 添加PyTorch，以防将来使用
 # world configuration
 base = wd.World(cam_pos=[2, 2, 2], lookat_pos=[0, 0, .3])
 mgm.gen_frame().attach_to(base)
-BASE_PATH = r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle"
-GRASP_DATA_PREFIX = "bottle_grasp"
-SAVE_PREFIX = "SharedGraspNetwork_bottle_experiment_data"
+BASE_PATH = r"E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Power_drill"
+GRASP_DATA_PREFIX = "power_drill_grasp"
+SAVE_PREFIX = "SharedGraspNetwork_power_drill_experiment_data_final"
 
 
 def grasp_load(path):
@@ -65,7 +65,7 @@ def robot_env_setup_without_table():
 def obj_setup(name, pos, rotmat, rgb=None, alpha=None):
     # we only consider SE(2) DOF for the object
     obj_cmodel = mcm.CollisionModel(name=name, rgb=rgb, alpha=alpha,
-                initor=r"E:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\bottle.stl")
+                initor=r"E:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\power_drill.stl")
     obj_cmodel.pos = pos
     obj_cmodel.rotmat = rotmat
     # obj_cmodel.show_local_frame()
@@ -243,13 +243,13 @@ def are_lists_identical(list1, list2):
 
 def parse_args():
     parser = argparse.ArgumentParser(description='共享抓取数据收集')
-    parser.add_argument('--grasp_ids', type=int, nargs='+', default=[57],
+    parser.add_argument('--grasp_ids', type=int, nargs='+', default=[199],
                         help='要处理的抓取ID列表')
     parser.add_argument('--total_iterations', type=int, default=int(1e4),
                         help='总迭代次数')
     parser.add_argument('--save_batch_size', type=int, default=1000,
                         help='每批保存的数据大小')
-    parser.add_argument('--seed', type=int, default=12,
+    parser.add_argument('--seed', type=int, default=11,
                         help='随机种子')
     return parser.parse_args()
 
@@ -314,7 +314,7 @@ if __name__ == '__main__':
     collect_data = []
 
     # object configuration
-    obj_cmodel = mcm.CollisionModel(initor=r"E:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\bottle.stl")
+    obj_cmodel = mcm.CollisionModel(initor=r"E:\Qin\wrs\wrs\HuGroup_Qin\objects\meshes\power_drill.stl")
     obj_init_pos = np.array([-0.424  ,0.156  ,0.   ])
     obj_init_rotmat = rm.rotmat_from_euler(0, 0, 0)
 
@@ -397,136 +397,140 @@ if __name__ == '__main__':
                     toggle_dbg=False
                 )
 
-                # 计算可行抓取 - robot_ik;
-                init_available_gids_robot_ik, _, _ = RegraspReasoner_without_table.find_feasible_gids(
-                    goal_pose=[init_pos_for_feasible, init_rotmat_for_feasible],
-                    obstacle_list=[],
-                    toggle_dbg=False,
-                )
+                # # 计算可行抓取 - robot_ik;
+                # init_available_gids_robot_ik, _, _ = RegraspReasoner_without_table.find_feasible_gids(
+                #     goal_pose=[init_pos_for_feasible, init_rotmat_for_feasible],
+                #     obstacle_list=[],
+                #     toggle_dbg=False,
+                # )
 
-                if init_available_gids_robot_ik is not None:
-                    init_available_gids_robot_ik = list(set(init_available_gids_robot_ik))
-                    # 计算可行抓取 - robot_gripper_collision
-                    init_available_gids_robot_collision, _, _  = RegraspReasoner.reason_incremental_common_gids(
-                        previous_available_gids = init_available_gids_robot_ik,
-                        goal_pose_list=[[init_pos_for_feasible, init_rotmat_for_feasible]],
-                        consider_robot=True,
-                        obstacle_list=[robot.body.lnk_list[0].cmodel, init_obj],
-                        toggle_dbg=False
-                    )
-                    if init_available_gids_robot_collision is not None:
-                        init_available_gids_robot_collision = list(set(init_available_gids_robot_collision))
-                else:
-                    init_available_gids_robot_collision = None
+                # if init_available_gids_robot_ik is not None:
+                #     init_available_gids_robot_ik = list(set(init_available_gids_robot_ik))
+                #     # 计算可行抓取 - robot_gripper_collision
+                #     init_available_gids_robot_collision, _, _  = RegraspReasoner.reason_incremental_common_gids(
+                #         previous_available_gids = init_available_gids_robot_ik,
+                #         goal_pose_list=[[init_pos_for_feasible, init_rotmat_for_feasible]],
+                #         consider_robot=True,
+                #         obstacle_list=[robot.body.lnk_list[0].cmodel, init_obj],
+                #         toggle_dbg=False
+                #     )
+                #     if init_available_gids_robot_collision is not None:
+                #         init_available_gids_robot_collision = list(set(init_available_gids_robot_collision))
+                # else:
+                #     init_available_gids_robot_collision = None
 
-                # 计算交集
-                common_elements = (set(init_available_gids_robot_ik) & set(init_available_gids_robot_collision)) \
-                                  if (init_available_gids_robot_ik is not None and init_available_gids_robot_collision is not None) else None
+                # # 计算交集
+                # common_elements = (set(init_available_gids_robot_ik) & set(init_available_gids_robot_collision)) \
+                #                   if (init_available_gids_robot_ik is not None and init_available_gids_robot_collision is not None) else None
 
-                # 如果交集为空集合，将其转换为None进行比较
-                if common_elements is not None and len(common_elements) == 0:
-                    common_elements = None
+                # # 如果交集为空集合，将其转换为None进行比较
+                # if common_elements is not None and len(common_elements) == 0:
+                #     common_elements = None
 
-                result = are_lists_identical(common_elements, init_available_gids_robot_table)
-                print("result_init: ", result)
+                # result = are_lists_identical(common_elements, init_available_gids_robot_table)
+                # print("result_init: ", result)
 
-                if not result:
-                    print("init_wrong")
-                    show_grasp(robot, init_obj, init_pos_for_feasible, init_rotmat_for_feasible,
-                                [18], object_feasible_grasps, gripper)
+                # if not result:
+                #     print("init_wrong")
+                #     show_grasp(robot, init_obj, init_pos_for_feasible, init_rotmat_for_feasible,
+                #                 [18], object_feasible_grasps, gripper)
 
                 init_obj.detach()
                 del init_obj
 
-                goal_obj = obj_setup(name="goal_obj", pos=goal_pos_for_feasible, rotmat=goal_rotmat_for_feasible, alpha=0.3)
+                # goal_obj = obj_setup(name="goal_obj", pos=goal_pos_for_feasible, rotmat=goal_rotmat_for_feasible, alpha=0.3)
 
-                goal_available_gids_robot_table, _, _ = RegraspReasoner.find_feasible_gids(
-                    goal_pose=[goal_pos_for_feasible, goal_rotmat_for_feasible],
-                    obstacle_list=[goal_obj],
-                    toggle_dbg=False
-                )
+                # goal_available_gids_robot_table, _, _ = RegraspReasoner.find_feasible_gids(
+                #     goal_pose=[goal_pos_for_feasible, goal_rotmat_for_feasible],
+                #     obstacle_list=[goal_obj],
+                #     toggle_dbg=False
+                # )
 
-                goal_available_gids_robot_ik, _, _ = RegraspReasoner_without_table.find_feasible_gids(
-                    goal_pose=[goal_pos_for_feasible, goal_rotmat_for_feasible],
-                    obstacle_list=[],
-                    toggle_dbg=False,
-                )
+                # goal_available_gids_robot_ik, _, _ = RegraspReasoner_without_table.find_feasible_gids(
+                #     goal_pose=[goal_pos_for_feasible, goal_rotmat_for_feasible],
+                #     obstacle_list=[],
+                #     toggle_dbg=False,
+                # )
 
-                if goal_available_gids_robot_ik is not None:
-                    goal_available_gids_robot_ik = list(set(goal_available_gids_robot_ik))
-                    # 计算可行抓取 - robot_gripper_collision
-                    goal_available_gids_robot_collision, _, _ = RegraspReasoner.reason_incremental_common_gids(
-                        previous_available_gids=goal_available_gids_robot_ik,
-                        goal_pose_list=[[goal_pos_for_feasible, goal_rotmat_for_feasible]],
-                        consider_robot=True,
-                        obstacle_list=[robot.body.lnk_list[0].cmodel, goal_obj],
-                        toggle_dbg=True
-                    )
-                    if goal_available_gids_robot_collision is not None:
-                        goal_available_gids_robot_collision = list(set(goal_available_gids_robot_collision))
-                else:
-                    goal_available_gids_robot_collision = None
+                # if goal_available_gids_robot_ik is not None:
+                #     goal_available_gids_robot_ik = list(set(goal_available_gids_robot_ik))
+                #     # 计算可行抓取 - robot_gripper_collision
+                #     goal_available_gids_robot_collision, _, _ = RegraspReasoner.reason_incremental_common_gids(
+                #         previous_available_gids=goal_available_gids_robot_ik,
+                #         goal_pose_list=[[goal_pos_for_feasible, goal_rotmat_for_feasible]],
+                #         consider_robot=True,
+                #         obstacle_list=[robot.body.lnk_list[0].cmodel, goal_obj],
+                #         toggle_dbg=True
+                #     )
+                #     if goal_available_gids_robot_collision is not None:
+                #         goal_available_gids_robot_collision = list(set(goal_available_gids_robot_collision))
+                # else:
+                #     goal_available_gids_robot_collision = None
 
-                # 计算交集
-                common_elements = (set(goal_available_gids_robot_ik) & set(goal_available_gids_robot_collision)) \
-                    if (goal_available_gids_robot_ik is not None and goal_available_gids_robot_collision is not None) else None
+                # # 计算交集
+                # common_elements = (set(goal_available_gids_robot_ik) & set(goal_available_gids_robot_collision)) \
+                #     if (goal_available_gids_robot_ik is not None and goal_available_gids_robot_collision is not None) else None
 
-                # 如果交集为空集合，将其转换为None进行比较
-                if common_elements is not None and len(common_elements) == 0:
-                    common_elements = None
+                # # 如果交集为空集合，将其转换为None进行比较
+                # if common_elements is not None and len(common_elements) == 0:
+                #     common_elements = None
 
-                result = are_lists_identical(common_elements, goal_available_gids_robot_table)
-                print("result_init: ", result)
+                # result = are_lists_identical(common_elements, goal_available_gids_robot_table)
+                # print("result_init: ", result)
 
-                if not result:
-                    print("init_wrong")
-                    show_grasp(robot, init_obj, goal_pos_for_feasible, goal_rotmat_for_feasible,
-                               [18], object_feasible_grasps, gripper)
+                # if not result:
+                #     print("init_wrong")
+                #     show_grasp(robot, init_obj, goal_pos_for_feasible, goal_rotmat_for_feasible,
+                #                [18], object_feasible_grasps, gripper)
 
-                goal_obj.detach()
-                del goal_obj
+                # goal_obj.detach()
+                # del goal_obj
 
-                # 找到共同的抓取ID
-                common_id = find_common_id(init_available_gids_robot_table, goal_available_gids_robot_table)
+                # # 找到共同的抓取ID
+                # common_id = find_common_id(init_available_gids_robot_table, goal_available_gids_robot_table)
 
-                if common_id:
-                    # show_common_grasp(
-                    #     obj_init_pos=init_pos_for_feasible.copy(),
-                    #     obj_init_rotmat=init_rotmat_for_feasible.copy(),
-                    #     obj_goal_pos=goal_pos_for_feasible.copy(),
-                    #     obj_goal_rotmat=goal_rotmat_for_feasible.copy(),
-                    #     obstacle=None,
-                    #     common_id=common_id,
-                    #     object_feasible_grasps=object_feasible_grasps,
-                    #     gripper=gripper
-                    # )
-                    pass
+                # if common_id:
+                #     # show_common_grasp(
+                #     #     obj_init_pos=init_pos_for_feasible.copy(),
+                #     #     obj_init_rotmat=init_rotmat_for_feasible.copy(),
+                #     #     obj_goal_pos=goal_pos_for_feasible.copy(),
+                #     #     obj_goal_rotmat=goal_rotmat_for_feasible.copy(),
+                #     #     obstacle=None,
+                #     #     common_id=common_id,
+                #     #     object_feasible_grasps=object_feasible_grasps,
+                #     #     gripper=gripper
+                #     # )
+                #     pass
+
+                # collect_data.append([[obj_init_pos, obj_init_rotmat],
+                #                      list(set(init_available_gids_robot_table)) if init_available_gids_robot_table is not None else None,
+                #                      list(set(init_available_gids_robot_ik)) if init_available_gids_robot_ik is not None else None,
+                #                      list(set(init_available_gids_robot_collision)) if init_available_gids_robot_collision is not None else None,
+                #                      init_stable_random_indices[sample_idx].copy(),
+
+                #                     [obj_goal_pos, obj_goal_rotmat],
+                #                     list(set(goal_available_gids_robot_table)) if goal_available_gids_robot_table is not None else None,
+                #                     list(set(goal_available_gids_robot_ik)) if goal_available_gids_robot_ik is not None else None,
+                #                     list(set(goal_available_gids_robot_collision)) if goal_available_gids_robot_collision is not None else None,
+                #                     goal_stable_random_indices[sample_idx].copy(),
+
+                #                     common_id if common_id is not None else None])
 
                 collect_data.append([[obj_init_pos, obj_init_rotmat],
-                                     list(set(init_available_gids_robot_table)) if init_available_gids_robot_table is not None else None,
-                                     list(set(init_available_gids_robot_ik)) if init_available_gids_robot_ik is not None else None,
-                                     list(set(init_available_gids_robot_collision)) if init_available_gids_robot_collision is not None else None,
-                                     init_stable_random_indices[sample_idx].copy(),
-
-                                    [obj_goal_pos, obj_goal_rotmat],
-                                    list(set(goal_available_gids_robot_table)) if goal_available_gids_robot_table is not None else None,
-                                    list(set(goal_available_gids_robot_ik)) if goal_available_gids_robot_ik is not None else None,
-                                    list(set(goal_available_gids_robot_collision)) if goal_available_gids_robot_collision is not None else None,
-                                    goal_stable_random_indices[sample_idx].copy(),
-
-                                    common_id if common_id is not None else None])
+                        list(set(init_available_gids_robot_table)) if init_available_gids_robot_table is not None else None,
+                        init_stable_random_indices[sample_idx].copy()])
 
                 if (sample_idx + 1) % SAVE_BATCH_SIZE == 0:
-                    # process_batch(collect_data, common_id_save_path)
+                    process_batch(collect_data, common_id_save_path)
                     collect_data.clear()
                     collect_data = []  # 明确重置列表
                     # 清理更多对象
                     if 'init_available_gids_robot_table' in locals(): del init_available_gids_robot_table
-                    if 'goal_available_gids_robot_table' in locals(): del goal_available_gids_robot_table
-                    if 'init_available_gids_robot_ik' in locals(): del init_available_gids_robot_ik
-                    if 'goal_available_gids_robot_ik' in locals(): del goal_available_gids_robot_ik
-                    if 'init_available_gids_robot_collision' in locals(): del init_available_gids_robot_collision
-                    if 'goal_available_gids_robot_collision' in locals(): del goal_available_gids_robot_collision
+                    # if 'goal_available_gids_robot_table' in locals(): del goal_available_gids_robot_table
+                    # if 'init_available_gids_robot_ik' in locals(): del init_available_gids_robot_ik
+                    # if 'goal_available_gids_robot_ik' in locals(): del goal_available_gids_robot_ik
+                    # if 'init_available_gids_robot_collision' in locals(): del init_available_gids_robot_collision
+                    # if 'goal_available_gids_robot_collision' in locals(): del goal_available_gids_robot_collision
                     gc.collect()
 
                 pbar.update(1)

@@ -37,7 +37,7 @@ base.pggen.plotAxis(base.render)
 
 # Boxes
 # model = loader.loadModel('models/box.egg')
-model = cm.CollisionModel("./objects/bunnysim.meshes")
+model = cm.CollisionModel("./objects/Bunnysim.meshes")
 node = bbd.BDTriangleBody(model, dynamic=True)
 bulletnodelist = []
 for i in range(3):

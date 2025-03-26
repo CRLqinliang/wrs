@@ -1,0 +1,2 @@
+grasp_id,nn_avg_time,nn_std_time,analysis_avg_time,analysis_std_time,precision,top_3_precision,top_10_precision,top_20_precision,positive_count,total_samples
+352,0.25243215560913085,0.005101198694328433,1.6238361835479735,0.367344649425157,0.9090909090909091,0.6666666666666666,0.8,0.85,33,3520

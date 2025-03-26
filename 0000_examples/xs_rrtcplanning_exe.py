@@ -7,7 +7,7 @@ import wrs.robot_con.xarm_shuidi.xarm_shuidi_x as xsx
 base = wd.World(cam_pos=[3, 1, 2], lookat_pos=[0, 0, 0])
 gm.gen_frame().attach_to(base)
 # object
-object = cm.CollisionModel("./objects/bunnysim.stl")
+object = cm.CollisionModel("./objects/Bunnysim.stl")
 object.set_pos(np.array([.85, 0, .37]))
 object.set_rgba([.5,.7,.3,1])
 object.attach_to(base)

@@ -3,7 +3,7 @@ import wrs.robot_sim.end_effectors.grippers.wrs_gripper.wrs_gripper_v2 as ee
 
 base = wd.World(cam_pos=rm.vec(.5, .5, .5), lookat_pos=rm.vec(0, 0, 0))
 # mgm.gen_frame().attach_to(base)
-obj_cmodel = mcm.CollisionModel("objects/bunnysim.stl")
+obj_cmodel = mcm.CollisionModel("objects/Bunnysim.stl")
 obj_cmodel.attach_to(base)
 
 gripper = ee.WRSGripper2()

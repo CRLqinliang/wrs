@@ -56,7 +56,7 @@ if __name__ == '__main__':
     import wrs.visualization.panda.world as wd
 
     # wd.World(cam_pos=[1.0, 1, .0, 1.0], lookat_pos=[0, 0, 0])
-    # obj_path = os.path.join(basis.__path__[0], 'objects', 'bunnysim.stl')
+    # obj_path = os.path.join(basis.__path__[0], 'objects', 'Bunnysim.stl')
     # objcm1= mcm.CollisionModel(obj_path)
     # pos = np.eye(4)
     # pos[:3, :3] = rm.rotmat_from_axangle([0, 0, 1], math.pi / 2)

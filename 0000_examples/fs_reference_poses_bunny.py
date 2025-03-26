@@ -3,7 +3,7 @@ import time
 from wrs import wd, rm, mcm, fsp
 
 base = wd.World(cam_pos=[1, 1, 1], lookat_pos=[0, 0, 0])
-obj_path = os.path.join("objects", "bunnysim.stl")
+obj_path = os.path.join("objects", "Bunnysim.stl")
 ground = mcm.gen_box(xyz_lengths=rm.vec(.5, .5, .01), pos=rm.vec(0, 0, -0.01))
 ground.attach_to(base)
 bunny = mcm.CollisionModel(obj_path)

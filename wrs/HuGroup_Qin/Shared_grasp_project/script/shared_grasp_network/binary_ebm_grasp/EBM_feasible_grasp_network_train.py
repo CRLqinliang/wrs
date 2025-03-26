@@ -247,8 +247,9 @@ class SharedGraspEnergyDataset(Dataset):
         return self.all_features[idx], self.all_labels[idx]
 
 
-class SharedGraspTableEnergyDataset(Dataset):
-    def __init__(self, data, grasp_pickle_file, use_quaternion=False, use_stable_label=True):
+class SharedGraspFinalEnergyDataset(Dataset):
+    def __init__(self, data, grasp_pickle_file, use_quaternion=False, use_stable_label=True, 
+                 grasp_type='robot_table', state_type='both'):
         """
         Args:
             data: 数据列表，每个item包含 
@@ -282,11 +283,10 @@ class SharedGraspTableEnergyDataset(Dataset):
         # 只有在使用stable_label时才创建编码器
         if self.use_stable_label:
             # 创建物体stable_id的One-Hot编码器
-            stable_types = [item[1] for item in data]  # stable_id
-            all_types = list(set(stable_types))
+            stable_types = [item[-1] for item in data]  # stable_id
             self.obj_encoder = OneHotEncoder(sparse_output=False)
-            self.obj_encoder.fit(np.array(all_types).reshape(-1, 1))
-            del stable_types, all_types
+            self.obj_encoder.fit(np.array(stable_types).reshape(-1, 1))
+            del stable_types
         
         self.prepare_data()
     
@@ -319,7 +319,7 @@ class SharedGraspTableEnergyDataset(Dataset):
         
         # 预计算每个数据项的样本数，并计算总样本数
         for item in self.data:
-            grasp_indices = item[-1]  # available_gids_table
+            grasp_indices = item[1]  # available_gids_table
             if grasp_indices is not None:
                 # 总样本数 = 抓取候选总数
                 sample_count = len(self.grasp_poses)
@@ -360,12 +360,12 @@ class SharedGraspTableEnergyDataset(Dataset):
             # 获取物体位姿和稳定性ID
             obj_pos = self._get_position(np.array(item[0][0], dtype=np.float32))
             obj_rot = self._convert_rotation(np.array(item[0][1], dtype=np.float32))
-            stable_id = item[1]
+            stable_id = item[-1]
             
             obj_pose = np.concatenate([obj_pos, obj_rot])
             
             # 获取有效抓取索引
-            grasp_indices = item[-1]
+            grasp_indices = item[1]
             if grasp_indices is None:
                 grasp_indices = []
             
@@ -971,7 +971,7 @@ def split_data_indices(total_size, train_split, val_split):
 
 def create_datasets(raw_data, indices, args):
     # 创建训练集
-    train_dataset = SharedGraspEnergyDataset(
+    train_dataset = SharedGraspFinalEnergyDataset(
         [raw_data[i] for i in indices['train']],
         args.grasp_data_path,
         use_quaternion=args.use_quaternion,
@@ -981,7 +981,7 @@ def create_datasets(raw_data, indices, args):
     )
 
     # 创建验证集和测试集
-    val_dataset = SharedGraspEnergyDataset(
+    val_dataset = SharedGraspFinalEnergyDataset(
         [raw_data[i] for i in indices['val']],
         args.grasp_data_path,
         use_quaternion=args.use_quaternion,
@@ -990,7 +990,7 @@ def create_datasets(raw_data, indices, args):
         state_type=args.state_type
     )
     
-    test_dataset = SharedGraspEnergyDataset(
+    test_dataset = SharedGraspFinalEnergyDataset(
         [raw_data[i] for i in indices['test']],
         args.grasp_data_path,
         use_quaternion=args.use_quaternion,
@@ -1052,7 +1052,7 @@ def calculate_input_dim(args):
     
     # 计算稳定性标签维度
     if args.use_stable_label:
-        stable_label_dim = 5  # 假设有5个稳定性类别
+        stable_label_dim = 3  # 假设有5个稳定性类别
         return pose_dim + stable_label_dim + grasp_pose_dim
     else:
         return pose_dim + grasp_pose_dim
@@ -1101,11 +1101,11 @@ def parse_args():
     
     # 数据相关参数
     parser.add_argument('--data_path', type=str, 
-                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\SharedGraspNetwork_bottle_experiment_data_57.pickle')
+                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\SharedGraspNetwork_bottle_experiment_data_final_352.pickle')
     parser.add_argument('--grasp_data_path', type=str,
-                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\bottle_grasp_57.pickle')
+                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\grasps\Bottle\bottle_grasp_352.pickle')
     parser.add_argument('--model_save_path', type=str,
-                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\feasible_best_model\best_model_grasp_ebm_SharedGraspNetwork_bottle_experiment_data_57_h3_b2048_lr0.001_t0.5_r0.99_s0.7_q1_sl1_grobot_table_stinit.pth')
+                       default=r'E:\Qin\wrs\wrs\HuGroup_Qin\Shared_grasp_project\model\feasible_best_model\best_model_grasp_ebm_SharedGraspNetwork_bottle_experiment_data_final_352_h3_b1024_lr0.001_t0.5_r0_s0.7_q1_sl1_grobot_table_stinit.pth')
     parser.add_argument('--train_split', type=float, default=0.7)
     parser.add_argument('--val_split', type=float, default=0.15)
     
@@ -1116,7 +1116,7 @@ def parse_args():
     parser.add_argument('--data_ratio', type=float, default=0.9, help='数据采样个数')
     
     # 模型结构参数 - 更新为简化的MLP参数
-    parser.add_argument('--input_dim', type=int, default=12)
+    parser.add_argument('--input_dim', type=int, default=19)
     parser.add_argument('--hidden_dims', nargs='+', type=int, default=[512, 512, 512])
     parser.add_argument('--num_layers', type=int, default=3)  # 替换num_res_blocks
     parser.add_argument('--dropout_rate', type=float, default=0.1)
@@ -1133,7 +1133,7 @@ def parse_args():
     parser.add_argument('--early_stop_patience', type=int, default=20)
     
     # 损失函数参数
-    parser.add_argument('--temperature', type=float, default=0.5)
+    parser.add_argument('--temperature', type=float, default=0.1)
 
     # 学习率调度器参数
     parser.add_argument('--lr_factor', type=float, default=0.5)
@@ -1142,7 +1142,7 @@ def parse_args():
     
     # 其他参数
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--train_model', type=bool, default=False)
+    parser.add_argument('--train_model', type=bool, default=True)
     parser.add_argument('--wandb_project', type=str, default='grasp_ebm')
     parser.add_argument('--wandb_name', type=str, default='grasp_random_position_bottle_robot_57_ebm_selu')
     
@@ -1168,7 +1168,7 @@ def main():
     set_seed(args.seed)
     
     # 初始化wandb
-    # wandb.init(project=args.wandb_project, name=args.wandb_name, config=vars(args))
+    wandb.init(project=args.wandb_project, name=args.wandb_name, config=vars(args))
     
     # 加载原始数据
     raw_data = load_raw_data(args.data_path, args.data_ratio, args.data_range)

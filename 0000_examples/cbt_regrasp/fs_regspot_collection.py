@@ -58,6 +58,7 @@ class Data(object):
 
 anime_data = Data(mesh_model_list=mesh_model_list)
 
+
 print(len(anime_data.mesh_model_list))
 
 

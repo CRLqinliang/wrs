@@ -8,7 +8,7 @@ if __name__ == '__main__':
 
     base = wd.World(cam_pos=np.array([.7, .05, .3]), lookat_pos=np.zeros(3))
     # object
-    object_ref = cm.CollisionModel(initor="./objects/bunnysim.stl",
+    object_ref = cm.CollisionModel(initor="./objects/Bunnysim.stl",
                                    cdprim_type=cm.CDPrimitiveType.BOX,
                                    cdmesh_type=cm.CDMeshType.OBB)
 
@@ -52,7 +52,7 @@ if __name__ == '__main__':
         gm.gen_sphere(pos=pnt, rgba=[1, 0, 0, 1], radius=.002).attach_to(base)
     print(mcd_result)
 
-    # object_ref_c = cmc.CollisionModel(initializer="./objects/bunnysim.stl",
+    # object_ref_c = cmc.CollisionModel(initializer="./objects/Bunnysim.stl",
     #                                   cdprim_type=mcm.CDPType.BOX,
     #                                   cdmesh_type=mcm.CDMType.DEFAULT)
     # # object 3

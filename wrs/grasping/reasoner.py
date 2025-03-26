@@ -68,7 +68,7 @@ class GraspReasoner(object):
         rbt_collided_grasps_num = 0
         if toggle_dbg:
             for obstacle in obstacle_list:
-                obstacle.show_cdprim()
+                # obstacle.show_cdprim()
                 obstacle.alpha = 1
                 obstacle.attach_to(base)
         for goal_id, goal_pose in enumerate(goal_pose_list):
@@ -101,20 +101,20 @@ class GraspReasoner(object):
                                 self._robot.end_effector.grip_at_by_pose(jaw_center_pos=goal_grasp.ac_pos,
                                                                          jaw_center_rotmat=goal_grasp.ac_rotmat,
                                                                          jaw_width=goal_grasp.ee_values)
-                                self._robot.end_effector.gen_meshmodel(rgb=rm.const.magenta, alpha=.3).attach_to(base)
+                                # self._robot.end_effector.gen_meshmodel(rgb=rm.const.magenta, alpha=.3).attach_to(base)
                                 pass
                         else:
-                           # for jnt_value in jnt_values:
-                            self._robot.goto_given_conf(jnt_values=jnt_values)
-                            if not self._robot.is_collided(obstacle_list=obstacle_list, toggle_dbg=False):
-                                previous_available_gids.append(gid)
-                                previous_availalbe_grasps.append(goal_grasp)
-                                previous_available_jv_list.append(jnt_values)
-                                if toggle_dbg:
-                                    self._robot.end_effector.gen_meshmodel(rgb=rm.const.green, alpha=.2).attach_to(base)
-                                    self._robot.gen_meshmodel(rgb=rm.const.green, alpha=0.2).attach_to(base)
-                                    # base.run()
-                                    pass
+                            for jnt_value in jnt_values:
+                                self._robot.goto_given_conf(jnt_values=jnt_value)
+                                if not self._robot.is_collided(obstacle_list=obstacle_list, toggle_dbg=False):
+                                    previous_available_gids.append(gid)
+                                    previous_availalbe_grasps.append(goal_grasp)
+                                    previous_available_jv_list.append(jnt_value)
+                                    if toggle_dbg:
+                                        self._robot.end_effector.gen_meshmodel(alpha=.5).attach_to(base)
+                                        self._robot.gen_meshmodel(alpha=.5).attach_to(base)
+                                        # base.run()
+                                        pass
 
                                 else:  # robot collided
                                     rbt_collided_grasps_num += 1
