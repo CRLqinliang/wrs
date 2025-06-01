@@ -1,0 +1,30 @@
+{
+  "pipe_path": "H:\\Qin\\wrs\\HuGroup_Qin\\objects\\meshes\\pipe_50ml.stl",
+  "pipe_grasp_path": "H:\\Qin\\wrs\\HuGroup_Qin\\data\\grasps\\pipe_50ml_grasps.pkl",
+  "pipe_release_path": "H:\\Qin\\wrs\\HuGroup_Qin\\data\\grasps\\pipe_50ml_grasps_release.pkl",
+  "pipe_grasp": {
+    "pos": [0.088, -0.22, 0.22],
+    "rot": [-85, 0, 0]
+  },
+  "pipe_replace": {
+    "pos": [0.088, -0.22, 0.15],
+    "rot": [-85, 0, 0]
+  },
+  "init_jnt_values": [
+    [0, -54.6387, 68.4399, -102.8725, 90.71, -180],
+    [-180, 25, 85, 0, -90, 0]
+  ],
+  "liquid_moving": {
+    "lft_arm_waste_release_position_jnv": [-35.5627, -39.4677, 33.2763, -82.1391, 90.6088, -188.5230],
+    "lft_arm_petri_position_jnv": [-19.6526, -39.3027, 31.5876, -80.5135, 90.1241, -172],
+    "lft_arm_liquid_absort_position_jnv": [-14.2898, -36.9776, 53.3197, -104.5671, 89.9568, -167.2595],
+    "absort_time": 2,
+    "release_time": 5
+  },
+  "pipe_reload": {
+    "lft_arm_reload_jnv": [-53.4756, -65.8491, 57.3106, -78.7635, 89.9729, -180],
+    "lft_arm_waiting_jnv": [0, -54.6387, 68.4399, -102.8725, 90.71, -180],
+    "rgt_arm_reload_jnv": [-169.6917, 39.6747, 53.2023, 83.483, -41.1699, -90.0054],
+    "rgt_arm_waiting_jnv": [-180, 25, 85, 0, -90, 0]
+  }
+}
